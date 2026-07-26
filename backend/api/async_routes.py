@@ -1,0 +1,674 @@
+"""
+TravelGenie Async API Routes
+
+Refactored API endpoints using async/await and the new agent system.
+All endpoints are async and use real-time data services.
+"""
+
+import logging
+import time
+from typing import Dict, Any, Optional, List
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, Field
+from backend.models import UserTravelInput, FinalTravelPlan
+from backend.workflow import get_workflow
+from backend.database.database import get_db
+from sqlalchemy.orm import Session
+import json
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api", tags=["TravelGenie API v2"])
+
+
+# ===== Request/Response Models =====
+
+class TravelPlanRequest(BaseModel):
+    """Request model for travel plan generation."""
+    budget: float = Field(..., gt=0, description="Total trip budget in USD")
+    source_city: str = Field(..., min_length=2, description="Departure city")
+    trip_days: int = Field(..., ge=1, le=30, description="Number of days")
+    travel_type: str = Field(..., pattern="^(solo|family|couple|friends)$")
+    transportation: str = Field(..., pattern="^(flight|train|bus|car)$")
+    interests: List[str] = Field(..., min_items=1)
+    hotel_preference: str = Field(..., pattern="^(budget|luxury|hostel|resort)$")
+    travel_month: str = Field(..., min_length=2)
+    special_requirements: Optional[str] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "budget": 3000,
+                "source_city": "New York",
+                "trip_days": 7,
+                "travel_type": "couple",
+                "transportation": "flight",
+                "interests": ["beaches", "food", "culture"],
+                "hotel_preference": "resort",
+                "travel_month": "July",
+            }
+        }
+
+
+class TravelPlanResponse(BaseModel):
+    """Response model for travel plans."""
+    status: str = Field(..., description="Status: success or error")
+    plan: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    generation_time_seconds: float = Field(..., description="Time taken to generate plan")
+    message: str = Field(..., description="Human-readable message")
+
+
+def _round(value: float, precision: int = 2) -> float:
+    return round(value, precision)
+
+
+def _money(value: float) -> float:
+    return round(value, 2)
+
+
+def _format_transport_option(mode: str, travel_time_hours: float, distance_km: float, budget: float, travelers: int) -> Dict[str, Any]:
+    mode_lower = mode.lower()
+    cost_multiplier = {
+        'flight': 0.2,
+        'train': 0.12,
+        'bus': 0.08,
+        'car': 0.15,
+    }.get(mode_lower, 0.1)
+    total_cost = max(20.0, distance_km * cost_multiplier)
+    cost_per_person = total_cost / max(travelers, 1)
+    score = max(5.0, min(10.0, 10.0 - travel_time_hours * 0.5))
+    co2 = round(distance_km * ({'flight': 0.24, 'train': 0.06, 'bus': 0.1, 'car': 0.18}.get(mode_lower, 0.15)), 1)
+    display = f"{travel_time_hours:.1f} hrs"
+    emoji = {
+        'flight': '✈️',
+        'train': '🚆',
+        'bus': '🚌',
+        'car': '🚗',
+    }.get(mode_lower, '🚗')
+
+    pros = [
+        f"Good balance of cost and speed for {mode_lower}",
+        "Suitable for most travelers",
+    ]
+    cons = [
+        f"May not be the fastest option compared to flight" if mode_lower != 'flight' else "Higher carbon footprint",
+    ]
+
+    return {
+        'mode': mode_lower,
+        'mode_emoji': emoji,
+        'travel_time_hours': _round(travel_time_hours, 1),
+        'travel_time_display': display,
+        'total_cost': _money(total_cost),
+        'cost_per_person': _money(cost_per_person),
+        'overall_score': _round(score, 1),
+        'co2_emissions_kg': co2,
+        'pros': pros,
+        'cons': cons,
+    }
+
+
+def _map_final_plan_to_frontend_plan(final_plan: FinalTravelPlan, generation_time: float) -> Dict[str, Any]:
+    user_input = final_plan.user_input
+    feasibility = final_plan.trip_feasibility
+    destination = final_plan.destination
+    schedule = final_plan.schedule
+    validation = final_plan.validation
+
+    total_budget = user_input.budget
+    total_cost = schedule.total_estimated_cost
+    remaining_budget = max(total_budget - total_cost, 0.0)
+    budget_utilization = _round((total_cost / total_budget) * 100, 1) if total_budget else 0.0
+    budget_level = 'Comfortable' if validation.budget_within_limit else 'Tight'
+    weather = destination.weather
+
+    hotel_options = []
+    for hotel in destination.hotel_options:
+        hotel_options.append({
+            'name': hotel.name,
+            'destination': destination.destination.city,
+            'category': hotel.category,
+            'price_per_night': hotel.price_per_night,
+            'rating': hotel.rating,
+            'reviews': hotel.reviews_count,
+            'amenities': hotel.amenities,
+            'latitude': hotel.location.latitude,
+            'longitude': hotel.location.longitude,
+            'distance_from_center': _round(hotel.location.latitude * 0.01 + hotel.location.longitude * 0.01, 1),
+            'description': hotel.description or f"Comfortable {hotel.category} stay near the city center.",
+            'score': _round(hotel.rating * 2, 1),
+            'value_rating': 'Great value' if hotel.rating >= 4 else 'Good choice',
+            'recommended_for': user_input.travel_type,
+        })
+
+    selected_hotel = {
+        'name': destination.selected_hotel.name,
+        'destination': destination.destination.city,
+        'category': destination.selected_hotel.category,
+        'price_per_night': destination.selected_hotel.price_per_night,
+        'rating': destination.selected_hotel.rating,
+        'reviews': destination.selected_hotel.reviews_count,
+        'amenities': destination.selected_hotel.amenities,
+        'latitude': destination.selected_hotel.location.latitude,
+        'longitude': destination.selected_hotel.location.longitude,
+        'distance_from_center': _round(destination.selected_hotel.location.latitude * 0.01 + destination.selected_hotel.location.longitude * 0.01, 1),
+        'description': destination.selected_hotel.description or f"Recommended stay in {destination.destination.city}.",
+        'score': _round(destination.selected_hotel.rating * 2, 1),
+        'value_rating': 'Best value' if destination.selected_hotel.rating >= 4 else 'Recommended',
+        'recommended_for': user_input.travel_type,
+    }
+
+    weather_forecast = [
+        {
+            'day': i + 1,
+            'date': schedule.start_date or '',
+            'day_name': f'Day {i + 1}',
+            'condition': weather.condition,
+            'temperature_c': _round(weather.current_temp),
+            'temperature_f': _round(weather.current_temp * 9 / 5 + 32),
+            'humidity': _round(weather.humidity * 100, 0),
+            'wind_speed_kmh': weather.wind_speed,
+            'precipitation_chance': _round(weather.rain_probability * 100, 0),
+            'icon': 'sun',
+            'recommendation': 'Pack for mild weather and carry a light jacket.' if weather.rain_probability < 0.5 else 'Expect showers; carry an umbrella.',
+        }
+        for i in range(min(user_input.trip_days, 5))
+    ]
+
+    transport_options = [
+        _format_transport_option(user_input.transportation, destination.travel_time_hours or max(1.0, destination.travel_distance / 800.0), destination.travel_distance or 1000.0, total_budget, 2),
+    ]
+    for fallback_mode in ['train', 'bus', 'car']:
+        if fallback_mode != user_input.transportation:
+            transport_options.append(_format_transport_option(fallback_mode, destination.travel_time_hours + 2.0, destination.travel_distance or 1000.0, total_budget, 2))
+
+    itinerary_days = []
+    for day in schedule.daily_itinerary:
+        slots = []
+        for activity in day.activities:
+            time_label = activity.get('time') or '09:00'
+            hour = int(time_label.split(':')[0]) if isinstance(time_label, str) and ':' in time_label else 9
+            slot_key = 'morning' if hour < 12 else 'afternoon' if hour < 18 else 'evening'
+            slots.append({
+                'slot': slot_key,
+                'icon': '☀️',
+                'label': slot_key,
+                'hours': time_label,
+                'activities': [
+                    {
+                        'activity': activity.get('activity', ''),
+                        'icon': '⭐',
+                        'description': activity.get('activity', ''),
+                        'duration': f"{activity.get('duration_minutes', 0)} min",
+                        'cost': f"${activity.get('cost_usd', 0):.0f}",
+                    }
+                ],
+                'weather_note': None,
+            })
+
+        itinerary_days.append({
+            'day': day.day_number,
+            'title': day.title,
+            'date': day.date or '',
+            'weather': {
+                'condition': weather.condition,
+                'temperature_c': _round(weather.current_temp),
+                'humidity': _round(weather.humidity * 100, 0),
+                'wind_speed_kmh': weather.wind_speed,
+            },
+            'hotel': destination.selected_hotel.name,
+            'slots': slots,
+            'daily_cost_estimate': _money(day.estimated_cost),
+            'highlights': [a.name for a in destination.attractions[:3]],
+        })
+
+    attraction_data = [
+        {
+            'name': attraction.name,
+            'type': attraction.category,
+            'duration': f"{_round(attraction.visit_duration_hours, 1)} hrs",
+            'cost': f"${_round(attraction.entry_fee, 0)}",
+            'description': attraction.description or '',
+            'best_time': 'Morning',
+            'tips': 'Arrive early to avoid crowds.',
+            'time': None,
+        }
+        for attraction in destination.attractions
+    ]
+
+    daily_breakdown = [
+        {
+            'day': day.day_number,
+            'theme': day.title,
+            'attractions': [act.get('name', '') for act in day.activities if isinstance(act, dict)] or [destination.attractions[0].name if destination.attractions else 'Local sightseeing'],
+        }
+        for day in schedule.daily_itinerary
+    ]
+
+    return {
+        'plan_id': final_plan.trip_id or 0,
+        'generation_time_seconds': _round(generation_time, 2),
+        'agent_performance': {},
+        'user_input': user_input.model_dump(),
+        'agents': {
+            'planner': {
+                'final_recommendation': {
+                    'summary': {
+                        'destination': destination.destination.city,
+                        'duration': f"{user_input.trip_days} days",
+                        'total_budget': total_budget,
+                        'within_budget': validation.budget_within_limit,
+                        'estimated_total_cost': total_cost,
+                    },
+                },
+                'reasoning_steps': [
+                    {
+                        'step': 1,
+                        'name': 'Budget Analysis',
+                        'status': 'success',
+                        'details': final_plan.trip_feasibility.reasoning,
+                    },
+                    {
+                        'step': 2,
+                        'name': 'Destination Selection',
+                        'status': 'success',
+                        'details': destination.reason,
+                    },
+                    {
+                        'step': 3,
+                        'name': 'Schedule Generation',
+                        'status': 'success',
+                        'details': f"Created {len(schedule.daily_itinerary)} daily itinerary entries.",
+                    },
+                    {
+                        'step': 4,
+                        'name': 'Validation',
+                        'status': 'success' if validation.is_valid else 'warning',
+                        'details': ' '.join(validation.recommendations or []),
+                    },
+                ],
+            },
+            'budget': {
+                'total_budget': total_budget,
+                'breakdown': {
+                    'hotel': {
+                        'amount': _money(total_budget * feasibility.budget_allocation.get('accommodation', 0) / 100),
+                        'percentage': feasibility.budget_allocation.get('accommodation', 0),
+                        'description': 'Accommodation budget',
+                        'per_night': _money(total_cost * 0.4 / user_input.trip_days),
+                    },
+                    'food': {
+                        'amount': _money(total_budget * feasibility.budget_allocation.get('food', 0) / 100),
+                        'percentage': feasibility.budget_allocation.get('food', 0),
+                        'description': 'Food and dining',
+                        'per_day': _money(total_cost * 0.25 / user_input.trip_days),
+                    },
+                    'activities': {
+                        'amount': _money(total_budget * feasibility.budget_allocation.get('activities', 0) / 100),
+                        'percentage': feasibility.budget_allocation.get('activities', 0),
+                        'description': 'Activities and tours',
+                        'per_day': _money(total_cost * 0.15 / user_input.trip_days),
+                    },
+                    'transport': {
+                        'amount': _money(total_budget * feasibility.budget_allocation.get('transport', 0) / 100),
+                        'percentage': feasibility.budget_allocation.get('transport', 0),
+                        'description': 'Transportation and transfers',
+                        'per_trip': _money(total_cost * 0.2),
+                    },
+                    'emergency': {
+                        'amount': _money(remaining_budget),
+                        'percentage': _round((remaining_budget / total_budget) * 100 if total_budget else 0),
+                        'description': 'Safety buffer',
+                    },
+                },
+                'daily_budget': {
+                    'per_day_total': _money(feasibility.daily_budget),
+                    'per_person_per_day': _money(feasibility.daily_budget / max(1, 2)),
+                },
+                'budget_level': budget_level,
+                'optimization_tips': validation.recommendations or ['Review your transportation and activity choices to keep costs low.'],
+            },
+            'destination': {
+                'suggestions': [
+                    {
+                        'name': destination.destination.city,
+                        'country': destination.destination.country,
+                        'continent': 'International',
+                        'season': [destination.best_season.value if hasattr(destination.best_season, 'value') else str(destination.best_season)],
+                        'popularity': _round(destination.confidence_score * 100, 0),
+                        'avg_daily_cost': destination.estimated_cost_per_day,
+                        'interests': user_input.interests,
+                        'description': destination.reason,
+                        'latitude': destination.destination.latitude,
+                        'longitude': destination.destination.longitude,
+                        'currency': 'USD',
+                        'language': 'English',
+                        'best_months': user_input.travel_month,
+                        'score': _round(destination.confidence_score * 100, 1),
+                        'estimated_total_cost': total_cost,
+                        'budget_fit': 'Within Budget' if validation.budget_within_limit else 'Over Budget',
+                        'match_reason': destination.reason,
+                    }
+                ],
+            },
+            'weather': {
+                'forecast': weather_forecast,
+                'warnings': weather.warnings,
+                'activity_suggestions': {
+                    'indoor': [
+                        'Visit a local museum',
+                        'Enjoy a cooking class',
+                    ],
+                    'outdoor': [
+                        'Take a scenic walking tour',
+                        'Explore the city by bike',
+                    ],
+                    'note': 'Weather is generally stable, plan outdoor activities in the morning.',
+                },
+                'weather_summary': f"{weather.condition} with a high of {weather.max_temp}°C.",
+            },
+            'transport': {
+                'options': transport_options,
+                'best_option': transport_options[0],
+                'comparison': {},
+            },
+            'hotel': {
+                'hotels': hotel_options,
+                'top_pick': selected_hotel,
+            },
+            'attraction': {
+                'attractions': attraction_data,
+                'daily_breakdown': daily_breakdown,
+            },
+            'itinerary': {
+                'days': itinerary_days,
+                'summary': {
+                    'total_days': len(itinerary_days),
+                    'total_activities': sum(len(day['slots']) for day in itinerary_days),
+                    'estimated_total_cost': total_cost,
+                },
+                'travel_tips': validation.recommendations or schedule.critical_notes,
+            },
+            'expense': {
+                'total_budget': total_budget,
+                'total_cost': total_cost,
+                'remaining_budget': remaining_budget,
+                'budget_utilization_percentage': budget_utilization,
+                'expense_breakdown': {
+                    'accommodation': {'amount': schedule.accommodation_cost, 'percentage': _round((schedule.accommodation_cost / total_cost)*100 if total_cost else 0), 'description': 'Hotel charges'},
+                    'food': {'amount': schedule.food_cost, 'percentage': _round((schedule.food_cost / total_cost)*100 if total_cost else 0), 'description': 'Meals and dining'},
+                    'transport': {'amount': schedule.transport_cost, 'percentage': _round((schedule.transport_cost / total_cost)*100 if total_cost else 0), 'description': 'Local transport'},
+                    'activities': {'amount': schedule.activities_cost, 'percentage': _round((schedule.activities_cost / total_cost)*100 if total_cost else 0), 'description': 'Tours and experiences'},
+                },
+                'chart_data': {
+                    'type': 'pie',
+                    'labels': ['Accommodation', 'Food', 'Transport', 'Activities'],
+                    'datasets': [{
+                        'data': [schedule.accommodation_cost, schedule.food_cost, schedule.transport_cost, schedule.activities_cost],
+                        'backgroundColor': ['#4F46E5','#F59E0B','#10B981','#EF4444'],
+                        'borderColor': ['#ffffff','#ffffff','#ffffff','#ffffff'],
+                        'borderWidth': 1,
+                    }],
+                },
+                'budget_status': {
+                    'status': 'within_budget' if validation.budget_within_limit else 'over_budget',
+                    'message': 'Good to go!' if validation.budget_within_limit else 'Review your estimates to avoid overbudget.',
+                    'color': 'green' if validation.budget_within_limit else 'red',
+                },
+                'saving_tips': validation.recommendations or ['Book tickets early and choose local eateries to save money.'],
+            },
+        },
+        'status': final_plan.status,
+    }
+
+
+# ===== Health & Info Endpoints =====
+
+@router.get("/")
+async def root():
+    """Root endpoint - API information."""
+    return {
+        "name": "TravelGenie API v2",
+        "version": "2.0.0",
+        "description": "Agentic AI Budget Travel Planner - Real-time Multi-Agent System",
+        "status": "operational",
+        "endpoints": {
+            "POST /api/plan": "Generate a travel plan",
+            "GET /api/health": "Health check",
+            "GET /api/agents": "List available agents",
+        }
+    }
+
+
+@router.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    try:
+        workflow = get_workflow()
+        return {
+            "status": "healthy",
+            "timestamp": time.time(),
+            "workflow": "ready",
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        raise HTTPException(status_code=503, detail="Service unhealthy")
+
+
+@router.get("/agents")
+async def list_agents():
+    """List all available agents in the system."""
+    return {
+        "agents": [
+            {
+                "name": "Trip Feasibility",
+                "description": "Validates trip feasibility and calculates budget allocation",
+                "status": "ready"
+            },
+            {
+                "name": "Destination",
+                "description": "Recommends best destination using real-time data",
+                "status": "ready"
+            },
+            {
+                "name": "Schedule",
+                "description": "Generates optimized day-by-day itinerary",
+                "status": "ready"
+            },
+            {
+                "name": "Validation",
+                "description": "Validates and repairs travel plans",
+                "status": "ready"
+            },
+        ],
+        "total_agents": 4,
+    }
+
+
+# ===== Core Endpoints =====
+
+@router.post("/plan", response_model=TravelPlanResponse)
+async def generate_travel_plan(request: TravelPlanRequest):
+    """
+    Generate a complete travel plan using the multi-agent system.
+    
+    This endpoint:
+    1. Validates user input
+    2. Runs the multi-agent pipeline
+    3. Returns a comprehensive travel plan with day-by-day itinerary
+    
+    Args:
+        request: Travel preferences from user
+        
+    Returns:
+        Complete travel plan or error message
+    """
+    start_time = time.time()
+    
+    try:
+        logger.info(f"Starting Generating travel plan for {request.source_city}")
+        
+        # Convert request to UserTravelInput
+        user_input = UserTravelInput(
+            budget=request.budget,
+            source_city=request.source_city,
+            trip_days=request.trip_days,
+            travel_type=request.travel_type,
+            transportation=request.transportation,
+            interests=request.interests,
+            hotel_preference=request.hotel_preference,
+            travel_month=request.travel_month,
+            special_requirements=request.special_requirements,
+        )
+        
+        # Get workflow and generate plan
+        workflow = get_workflow()
+        final_plan: FinalTravelPlan = await workflow.plan_trip(user_input)
+        
+        generation_time = time.time() - start_time
+        
+        # Map the final plan into the frontend-friendly schema
+        plan_dict = _map_final_plan_to_frontend_plan(final_plan, generation_time)
+        
+        logger.info(f"Plan generated in {generation_time:.2f}s")
+        
+        return TravelPlanResponse(
+            status="success",
+            plan=plan_dict,
+            error=None,
+            generation_time_seconds=generation_time,
+            message=f"Travel plan generated successfully for {request.source_city} in {generation_time:.2f} seconds"
+        )
+        
+    except ValueError as e:
+        logger.warning(f"Validation error: {e}")
+        generation_time = time.time() - start_time
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid input: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Plan generation failed: {e}", exc_info=True)
+        generation_time = time.time() - start_time
+        
+        return TravelPlanResponse(
+            status="error",
+            plan=None,
+            error=str(e),
+            generation_time_seconds=generation_time,
+            message=f"Failed to generate travel plan: {str(e)}"
+        )
+
+
+@router.get("/services/status")
+async def services_status():
+    """
+    Get status of all external services.
+    
+    Returns:
+        Status of each service: Geo, Places, Routing, Weather, Cache
+    """
+    from backend.services.geo_service import get_geo_service
+    from backend.services.places_service import get_places_service
+    from backend.services.routing_service import get_routing_service
+    from backend.services.weather_service import get_weather_service
+    from backend.services.cache_service import get_cache_service
+    
+    services_to_check = {
+        "Geo (Nominatim)": get_geo_service(),
+        "Places (Overpass)": get_places_service(),
+        "Routing (OSRM)": get_routing_service(),
+        "Weather (OpenWeatherMap)": get_weather_service(),
+        "Cache": get_cache_service(),
+    }
+    
+    status_results = {}
+    for service_name, service in services_to_check.items():
+        try:
+            is_healthy = await service.health_check()
+            status_results[service_name] = "operational" if is_healthy else "degraded"
+        except Exception as e:
+            logger.warning(f"Service check failed for {service_name}: {e}")
+            status_results[service_name] = "error"
+    
+    return {
+        "timestamp": time.time(),
+        "services": status_results,
+        "overall_status": "operational" if all(s != "error" for s in status_results.values()) else "degraded",
+    }
+
+
+# ===== Historical & Utility Endpoints =====
+
+@router.get("/history")
+async def get_history(limit: int = 10, db: Session = Depends(get_db)):
+    """
+    Get recent travel plan history.
+    
+    Args:
+        limit: Maximum number of plans to return
+        db: Database session
+        
+    Returns:
+        List of recent travel plans
+    """
+    try:
+        from backend.database.models import Trip
+        
+        trips = db.query(Trip).order_by(Trip.created_at.desc()).limit(limit).all()
+        
+        return {
+            "count": len(trips),
+            "trips": [
+                {
+                    "id": t.id,
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                    "destination": t.destination,
+                    "budget": t.budget,
+                    "trip_days": t.trip_days,
+                    "travel_type": t.travel_type,
+                    "status": t.status,
+                }
+                for t in trips
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Failed to get history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve history")
+
+
+@router.get("/plan/{plan_id}")
+async def get_plan(plan_id: int, db: Session = Depends(get_db)):
+    """
+    Retrieve a previously generated plan by ID.
+    
+    Args:
+        plan_id: Plan ID
+        db: Database session
+        
+    Returns:
+        Complete travel plan details
+    """
+    try:
+        from backend.database.models import Trip
+        
+        trip = db.query(Trip).filter(Trip.id == plan_id).first()
+        if not trip:
+            raise HTTPException(status_code=404, detail="Plan not found")
+        
+        return {
+            "id": trip.id,
+            "created_at": trip.created_at.isoformat() if trip.created_at else None,
+            "destination": trip.destination,
+            "budget": trip.budget,
+            "trip_days": trip.trip_days,
+            "travel_type": trip.travel_type,
+            "data": json.loads(trip.final_recommendation) if trip.final_recommendation else None,
+            "status": trip.status,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get plan: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve plan")
