@@ -198,8 +198,8 @@ Add screenshots of:
 
 ## 👨‍💻 Developed By
 
-**Rithik Varshan A R**
-**Sarajwanth M**
+**Rithik Varshan A R ,**
+**Sarajwanth M ,**
 **Suryaprasath S**
 
 B.E. Electronics and Communication Engineering (ECE)
