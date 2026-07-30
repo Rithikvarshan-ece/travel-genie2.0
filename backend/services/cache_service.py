@@ -44,19 +44,34 @@ class CacheService:
         self.logger.info("CacheService initialized")
 
     def _init_mongodb(self):
-        """Initialize MongoDB connection."""
+        """Initialize MongoDB connection with an eager ping to verify connectivity."""
         try:
             from pymongo import MongoClient
-            self._mongo_client = MongoClient(self.settings.mongodb_url, serverSelectionTimeoutMS=5000)
+            self._mongo_client = MongoClient(
+                self.settings.mongodb_url,
+                serverSelectionTimeoutMS=10000,
+                connectTimeoutMS=10000,
+                socketTimeoutMS=10000,
+            )
+            # Eagerly verify the connection — MongoClient is lazy by default
+            self._mongo_client.admin.command("ping")
             self._db = self._mongo_client[self.settings.mongodb_database]
-            # Create TTL index
+            # Ensure TTL index exists on created_at field
             self._db.cache.create_index(
                 "created_at",
-                expireAfterSeconds=self.ttl_minutes * 60
+                expireAfterSeconds=self.ttl_minutes * 60,
+                background=True,
             )
-            self.logger.info("MongoDB cache initialized")
+            self.logger.info("MongoDB cache initialized and ping successful")
         except Exception as e:
-            self.logger.warning(f"Warning MongoDB initialization failed: {e}, using SQLite fallback")
+            self.logger.warning(f"MongoDB initialization failed: {e} — falling back to SQLite cache")
+            if self._mongo_client:
+                try:
+                    self._mongo_client.close()
+                except Exception:
+                    pass
+            self._mongo_client = None
+            self._db = None
             self._use_mongodb = False
             self._init_sqlite()
 

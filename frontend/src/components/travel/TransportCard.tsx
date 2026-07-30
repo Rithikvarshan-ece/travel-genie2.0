@@ -1,8 +1,14 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Card, CardContent } from '@/components/ui/Card';
+import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Plane, Train, Bus, Car, Check, X, Leaf } from 'lucide-react';
+
+const INR = (v: number | string | undefined | null): string => {
+  const n = typeof v === 'string' ? parseFloat(v) : (v ?? NaN);
+  if (!isFinite(n)) return '₹N/A';
+  return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n * 83);
+};
 
 interface TransportOption {
   mode: string;
@@ -101,10 +107,10 @@ export default function TransportCard({ data }: TransportCardProps) {
                 </div>
                 <div className="text-right">
                   <p className="text-lg font-bold text-slate-900 dark:text-white">
-                    ${option.total_cost.toFixed(0)}
+                    {INR(option.total_cost)}
                   </p>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    ${option.cost_per_person.toFixed(0)}/person
+                    {INR(option.cost_per_person)}/person
                   </p>
                 </div>
               </div>

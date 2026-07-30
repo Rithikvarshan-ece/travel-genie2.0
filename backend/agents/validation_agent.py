@@ -113,32 +113,45 @@ IMPORTANT:
         """
         try:
             # Extract inputs
-            if not isinstance(input_models, tuple) or len(input_models) != 4:
-                raise AgentException(
-                    self.name,
-                    "Expected tuple of (UserTravelInput, TripFeasibilityOutput, DestinationOutput, ScheduleOutput)"
-                )
+            route_logistics = None
+            if isinstance(input_models, tuple):
+                if len(input_models) == 5:
+                    user_input, feasibility, destination, route_logistics, schedule = input_models
+                elif len(input_models) == 4:
+                    user_input, feasibility, destination, schedule = input_models
+                else:
+                    raise AgentException(
+                        self.name,
+                        f"Expected tuple of 4 or 5 elements, got {len(input_models)}"
+                    )
+            else:
+                raise AgentException(self.name, "Expected tuple input")
 
-            user_input, feasibility, destination, schedule = input_models
             self.last_input = user_input
             self.last_schedule = schedule
- 
+            self.last_destination = destination
+            self.last_route_logistics = route_logistics
+
             # Build validation prompt
             user_prompt = self._build_user_prompt(
                 user_input, feasibility, destination, schedule
             )
 
             # Query LLM
-            llm_response = await self.query_llm(user_prompt)
- 
+            llm_response = await self.query_llm(
+                user_prompt=user_prompt,
+                system_prompt=self.get_system_prompt(),
+                output_model=ValidationOutput,
+            )
+
             # Parse output
             if isinstance(llm_response, BaseModel):
                 output = llm_response
             else:
                 output = self.parse_json_output(llm_response, ValidationOutput)
 
-            # Post-process validation
-            self._post_process_validation(output, schedule, user_input)
+            # Post-process validation — always uses actual costs via single source of truth calculator
+            self._post_process_validation(output, schedule, user_input, destination, route_logistics)
 
             return output
 
@@ -206,90 +219,141 @@ VALIDATION TASKS:
 5. Ensure transportation is feasible
 6. Identify any unrealistic assumptions
  
-Return validation results as JSON with all issues found and suggested fixes."""
+Return validation results as a flat JSON object. The JSON must have these fields at the root level:
+- is_valid (boolean): whether the plan is valid overall
+- issues (array): list of issues, each with category (string), severity ("critical"|"warning"|"info"), description (string), suggested_fix (string or null)
+- budget_within_limit (boolean)
+- schedule_feasible (boolean)
+- weather_compatible (boolean)
+- hotel_verified (boolean)
+- total_cost (number)
+- budget_buffer (number)
+- recommendations (array of strings)
+- confidence_score (number between 0 and 1)
+
+Do NOT wrap the output in a key like "validation_results" or "validation" — return the raw object directly.
+Example:
+{{
+  "is_valid": true,
+  "issues": [{{"category": "budget", "severity": "warning", "description": "Slightly tight budget", "suggested_fix": "Consider budget hotel"}}],
+  "budget_within_limit": true,
+  "schedule_feasible": true,
+  "weather_compatible": true,
+  "hotel_verified": true,
+  "total_cost": 2450.00,
+  "budget_buffer": 550.00,
+  "recommendations": ["Book early"],
+  "confidence_score": 0.90
+}}"""
  
     async def fallback_response(self, user_prompt: str, system_prompt: str, output_model: type) -> ValidationOutput:
-        """
-        Generate a fallback validation response when the LLM is unavailable.
-        """
+        """Fallback validation using actual hotel cost from destination."""
         user_input = getattr(self, 'last_input', None)
         schedule = getattr(self, 'last_schedule', None)
+        destination = getattr(self, 'last_destination', None)
         if not isinstance(user_input, UserTravelInput) or not isinstance(schedule, ScheduleOutput):
             raise AgentException(self.name, "Fallback unavailable without valid input and schedule")
- 
+
         issues = []
-        if schedule.total_estimated_cost > user_input.budget:
+        # Use actual hotel cost
+        days = max(user_input.trip_days, 1)
+        hotel_cost = destination.selected_hotel.price_per_night * days if destination else schedule.accommodation_cost
+        actual_total = round(hotel_cost + schedule.transport_cost + schedule.food_cost + schedule.activities_cost, 2)
+
+        if actual_total > user_input.budget:
+            exceeded = round(actual_total - user_input.budget, 2)
             issues.append(ValidationIssue(
                 category="budget",
                 severity="critical",
-                description=(
-                    f"Total cost ${schedule.total_estimated_cost:.2f} exceeds budget ${user_input.budget:.2f}."
-                ),
-                suggested_fix="Reduce daily activity spending or choose a less expensive hotel."
+                description=f"Actual cost ${actual_total:.2f} exceeds budget ${user_input.budget:.2f} by ${exceeded:.2f}.",
+                suggested_fix="Choose a less expensive hotel or increase your budget."
             ))
- 
+
         if any(day.estimated_cost < 0 for day in schedule.daily_itinerary):
             issues.append(ValidationIssue(
-                category="schedule",
-                severity="critical",
+                category="schedule", severity="critical",
                 description="One or more days have a negative estimated cost.",
-                suggested_fix="Review itinerary costs and ensure all estimates are positive."
+                suggested_fix="Review itinerary costs."
             ))
- 
-        is_valid = len([i for i in issues if i.severity == "critical"]) == 0
- 
-        output = ValidationOutput(
+
+        is_valid = not any(i.severity == "critical" for i in issues)
+        return ValidationOutput(
             is_valid=is_valid,
             issues=issues,
-            budget_within_limit=schedule.total_estimated_cost <= user_input.budget,
+            budget_within_limit=actual_total <= user_input.budget,
             schedule_feasible=True,
             weather_compatible=True,
             hotel_verified=True,
-            total_cost=schedule.total_estimated_cost,
-            budget_buffer=max(user_input.budget - schedule.total_estimated_cost, 0.0),
-            recommendations=[
-                "Confirm hotel pricing and local transportation costs.",
-            ],
-            confidence_score=0.75,
+            total_cost=actual_total,
+            budget_buffer=round(user_input.budget - actual_total, 2),
+            recommendations=["Confirm hotel pricing and local transportation costs."],
+            confidence_score=0.80,
         )
- 
-        return output
  
     def _post_process_validation(
         self,
         validation: ValidationOutput,
         schedule: ScheduleOutput,
         user_input: UserTravelInput,
+        destination: DestinationOutput = None,
+        route_logistics = None,
     ) -> None:
         """
-        Post-process validation results to add computational checks.
-        
-        Args:
-            validation: Validation output to update
-            schedule: Schedule to check
-            user_input: User input for budget
+        Recompute actual trip cost from real selected components using central cost calculator.
+        Never trusts the LLM's total_estimated_cost — always recalculates from single source of truth.
         """
-        # Additional checks beyond LLM validation
-        
-        # Check budget strictly
-        if schedule.total_estimated_cost > user_input.budget:
+        days = max(user_input.trip_days, 1)
+
+        from backend.utils.cost_calculator import calculate_plan_costs
+        summary = calculate_plan_costs(user_input, destination, route_logistics, schedule)
+
+        actual_total = summary.total_cost
+        actual_hotel_cost = summary.hotel_cost
+        actual_transport = summary.transport_cost
+
+        # Sync schedule costs to match central calculation
+        schedule.accommodation_cost = summary.hotel_cost
+        schedule.transport_cost = summary.transport_cost
+        schedule.food_cost = summary.food_cost
+        schedule.activities_cost = summary.activities_cost
+        schedule.total_estimated_cost = summary.total_cost
+
+        over_budget = not summary.within_budget
+        exceeded_by = round(actual_total - user_input.budget, 2) if over_budget else 0.0
+
+        if over_budget:
+            inr_exceeded = round(exceeded_by * 83)
+            inr_total = round(actual_total * 83)
+            inr_budget = round(user_input.budget * 83)
+            hotel_name = destination.selected_hotel.name if destination and destination.selected_hotel else "Hotel"
             issue = ValidationIssue(
                 category="budget",
                 severity="critical",
-                description=f"Plan exceeds budget: ${schedule.total_estimated_cost} > ${user_input.budget}",
-                suggested_fix="Remove low-priority activities or upgrade to cheaper accommodation",
+                description=(
+                    f"Actual total cost INR {inr_total:,} exceeds budget INR {inr_budget:,} "
+                    f"by INR {inr_exceeded:,}. "
+                    f"{hotel_name} costs INR {round(actual_hotel_cost*83):,} ({days} nights) "
+                    f"and Transport costs INR {round(actual_transport*83):,}."
+                ),
+                suggested_fix=(
+                    f"Switch to a cheaper transport mode (e.g. train/bus) or budget hotel to fit budget INR {inr_budget:,}."
+                ),
             )
-            if issue not in validation.issues:
+            # Avoid duplicate issues
+            existing_cats = {i.category for i in validation.issues if i.severity == "critical"}
+            if "budget" not in existing_cats:
                 validation.issues.append(issue)
             validation.budget_within_limit = False
+        else:
+            validation.budget_within_limit = True
 
-        # Recalculate overall validity
+        # Recalculate overall validity from critical issues
         critical_issues = [i for i in validation.issues if i.severity == "critical"]
         validation.is_valid = len(critical_issues) == 0
 
-        # Update final cost
-        validation.total_cost = schedule.total_estimated_cost
-        validation.budget_buffer = user_input.budget - schedule.total_estimated_cost
+        # Update final cost fields
+        validation.total_cost = summary.total_cost
+        validation.budget_buffer = summary.remaining_budget
 
 
 # Global Validation Agent instance

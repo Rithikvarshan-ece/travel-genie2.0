@@ -2,8 +2,16 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
-import { Clock, DollarSign, MapPin, Lightbulb } from 'lucide-react';
+import { Clock, MapPin, Lightbulb } from 'lucide-react';
 import type { Attraction } from '@/types/travel';
+
+// Convert "$5" or "$5.0" strings from backend to INR display
+const costToINR = (cost: string | undefined): string => {
+  if (!cost) return '';
+  const num = parseFloat(cost.replace(/[^0-9.]/g, ''));
+  if (!isFinite(num) || num === 0) return 'Free';
+  return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(num * 83);
+};
 
 interface AttractionCardProps {
   data: { attractions: Attraction[]; daily_breakdown: any[] };
@@ -43,7 +51,7 @@ export default function AttractionCard({ data }: AttractionCardProps) {
               </div>
               {attr.cost && (
                 <span className="text-sm font-medium text-indigo-600 dark:text-indigo-400">
-                  {attr.cost}
+                  {costToINR(attr.cost)}
                 </span>
               )}
             </div>

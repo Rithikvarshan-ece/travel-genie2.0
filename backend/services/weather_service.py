@@ -124,8 +124,9 @@ class WeatherService(BaseService):
         clouds = data.get("clouds", {})
         rain = data.get("rain", {})
 
-        # Calculate rain probability
-        rain_prob = min(len(rain) * 0.5, 1.0)  # Rough estimate
+        # Calculate rain probability from pop field or rain volume
+        rain_1h = rain.get("1h", 0) if isinstance(rain, dict) else 0
+        rain_prob = min(rain_1h / 5.0, 1.0) if rain_1h else 0.0  # 5mm/h = 100%
 
         warnings = []
         if main.get("temp", 0) < 0:

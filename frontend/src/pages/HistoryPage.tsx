@@ -4,10 +4,16 @@ import { motion } from 'framer-motion';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { 
-  Clock, MapPin, DollarSign, Calendar, Users, 
+  Clock, MapPin, IndianRupee, Calendar, Users, 
   ArrowRight, Trash2, RefreshCw, History, 
   Search, Filter, Loader2
 } from 'lucide-react';
+
+const INR = (v: number | undefined | null): string => {
+  const n = v ?? NaN;
+  if (!isFinite(n)) return '₹N/A';
+  return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n * 83);
+};
 
 interface TripHistoryItem {
   id: number;
@@ -176,8 +182,8 @@ export default function HistoryPage() {
                             {formatDate(trip.created_at)}
                           </span>
                           <span className="flex items-center gap-1">
-                            <DollarSign className="w-3.5 h-3.5" />
-                            ${trip.budget?.toLocaleString()}
+                            <IndianRupee className="w-3.5 h-3.5" />
+                            {INR(trip.budget)}
                           </span>
                           <span className="flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5" />

@@ -141,6 +141,7 @@ class GeoService(BaseService):
             "q": location_query,
             "format": "json",
             "limit": 1,
+            "addressdetails": 1,
         }
 
         response = await client.get(url, params=params, timeout=self.settings.nominatim_timeout)
@@ -152,13 +153,21 @@ class GeoService(BaseService):
             raise ValueError(f"No results found for '{location_query}'")
 
         result = data[0]
-        
+        # Nominatim search returns display_name and address fields
+        address = result.get("address", {})
+        city_name = (
+            address.get("city")
+            or address.get("town")
+            or address.get("village")
+            or result.get("name")
+            or location_query
+        )
         return Location(
             latitude=float(result["lat"]),
             longitude=float(result["lon"]),
-            city=result.get("name", location_query),
-            country=result.get("address", {}).get("country", "Unknown"),
-            region=result.get("address", {}).get("state", None),
+            city=city_name,
+            country=address.get("country", result.get("display_name", "Unknown").split(",")[-1].strip()),
+            region=address.get("state", None),
         )
 
     async def reverse_geocode(self, latitude: float, longitude: float) -> Location:

@@ -109,40 +109,52 @@ Your response must be valid JSON matching the provided schema."""
         user_input = None
         feasibility = None
  
+        route_logistics = None
+
         if isinstance(input_model, tuple):
-            if len(input_model) != 3:
+            if len(input_model) == 4:
+                destination, user_input, feasibility, route_logistics = input_model
+            elif len(input_model) == 3:
+                destination, user_input, feasibility = input_model
+            else:
                 raise AgentException(
                     self.name,
-                    f"Expected tuple of (DestinationOutput, UserTravelInput, TripFeasibilityOutput), got length {len(input_model)}"
+                    f"Expected tuple of (DestinationOutput, UserTravelInput, TripFeasibilityOutput, optional RouteLogisticsOutput), got length {len(input_model)}"
                 )
-            destination, user_input, feasibility = input_model
         else:
             destination = input_model
- 
+
         if not isinstance(destination, DestinationOutput):
             raise AgentException(
                 self.name,
                 f"Expected DestinationOutput, got {type(destination).__name__}"
             )
- 
+
         self.last_destination = destination
         self.last_user_input = user_input
         self.last_feasibility = feasibility
- 
+        self.last_route_logistics = route_logistics
+
         try:
             # Build user prompt with all available information
             user_prompt = self._build_user_prompt(destination, user_input)
 
-            # Query LLM
-            llm_response = await self.query_llm(user_prompt)
- 
-            # Parse and validate output
-            if isinstance(llm_response, BaseModel):
-                output = llm_response
-            else:
-                output = self.parse_json_output(llm_response, ScheduleOutput)
+            # Query LLM with output model for direct parsing
+            llm_response = await self.query_llm(
+                user_prompt=user_prompt,
+                system_prompt=self.get_system_prompt(),
+                output_model=ScheduleOutput,
+            )
 
-            # Validate reasonableness
+            # Validate reasonableness & sync costs via central cost calculator
+            output = llm_response
+            from backend.utils.cost_calculator import calculate_plan_costs
+            summary = calculate_plan_costs(user_input, destination, route_logistics, output)
+            output.accommodation_cost = summary.hotel_cost
+            output.transport_cost = summary.transport_cost
+            output.food_cost = summary.food_cost
+            output.activities_cost = summary.activities_cost
+            output.total_estimated_cost = summary.total_cost
             self._validate_schedule(output)
 
             return output
@@ -224,6 +236,9 @@ REQUIREMENTS:
 
 EXAMPLE STRUCTURE:
 {{
+    "destination": {{"latitude": {destination.destination.latitude}, "longitude": {destination.destination.longitude}, "city": "{destination.destination.city}", "country": "{destination.destination.country}", "region": null}},
+    "start_date": null,
+    "end_date": null,
     "daily_itinerary": [
         {{
             "day_number": 1,
@@ -233,7 +248,7 @@ EXAMPLE STRUCTURE:
                 ...
             ],
             "meals": {{"breakfast": "...", "lunch": "...", "dinner": "..."}},
-            "hotel_check_in": "HH:MM",
+            "hotel_check_in": "14:00",
             "hotel_check_out": null,
             "estimated_cost": 100,
             "transportation_needed": ["Metro", "Walking"],
@@ -254,83 +269,105 @@ EXAMPLE STRUCTURE:
 Generate the complete itinerary now as valid JSON only."""
  
     async def fallback_response(self, user_prompt: str, system_prompt: str, output_model: type) -> ScheduleOutput:
-        """
-        Generate a fallback schedule when the LLM is unavailable.
-        """
+        """Generate a rich fallback schedule using real attraction data from DestinationAgent."""
         destination = getattr(self, 'last_destination', None)
+        user_input = getattr(self, 'last_user_input', None)
         if not isinstance(destination, DestinationOutput):
             raise AgentException(self.name, "Fallback unavailable without valid destination")
- 
-        days = 3
+
+        days = getattr(user_input, 'trip_days', 3) if user_input else 3
+        city = destination.destination.city
+        attractions = destination.attractions  # real attractions from DestinationAgent
+        n = len(attractions)
+
+        # Meal suggestions based on city
+        CITY_MEALS = {
+            "Paris":     {"b": "Café de Flore breakfast", "l": "Brasserie lunch near the Louvre", "d": "Dinner at a bistro in Le Marais"},
+            "Bangkok":   {"b": "Khao tom (rice soup) at a street stall", "l": "Pad Thai at Thip Samai", "d": "Rooftop dinner at Vertigo"},
+            "Tokyo":     {"b": "Tamago gohan at hotel", "l": "Ramen at Ichiran", "d": "Sushi at Tsukiji Outer Market"},
+            "Mumbai":    {"b": "Vada pav at a local stall", "l": "Thali at Swati Snacks", "d": "Seafood dinner at Trishna"},
+            "Delhi":     {"b": "Paratha at Paranthe Wali Gali", "l": "Butter chicken at Moti Mahal", "d": "Dinner at Indian Accent"},
+            "Goa":       {"b": "Poha and chai at a beach shack", "l": "Fish curry rice at a local restaurant", "d": "Seafood BBQ at Baga Beach"},
+            "Jaipur":    {"b": "Pyaaz kachori at Rawat Mishthan", "l": "Dal baati churma at Chokhi Dhani", "d": "Dinner at 1135 AD, Amber Fort"},
+            "Chennai":   {"b": "Idli sambar at Murugan Idli Shop", "l": "Chettinad lunch at Ponnusamy Hotel", "d": "Dinner at Copper Chimney"},
+            "Bali":      {"b": "Nasi goreng at the hotel", "l": "Babi guling at Ibu Oka", "d": "Sunset dinner at Jimbaran Bay"},
+            "Singapore": {"b": "Kaya toast at Ya Kun", "l": "Chicken rice at Tian Tian", "d": "Dinner at Lau Pa Sat hawker centre"},
+            "Dubai":     {"b": "Shakshuka at a café", "l": "Al Faham chicken at Al Mallah", "d": "Dinner at Pierchic"},
+            "Rome":      {"b": "Cornetto and cappuccino at a bar", "l": "Cacio e pepe at Tonnarello", "d": "Dinner at La Pergola"},
+            "Barcelona": {"b": "Pan con tomate at a café", "l": "Tapas at El Xampanyet", "d": "Paella dinner at La Mar Salada"},
+            "Kyoto":     {"b": "Tofu kaiseki breakfast", "l": "Soba noodles at Honke Tagoto", "d": "Kaiseki dinner at Kikunoi"},
+        }
+        meals_tmpl = CITY_MEALS.get(city, {
+            "b": "Breakfast at the hotel",
+            "l": "Lunch at a local restaurant",
+            "d": "Dinner at a recommended restaurant",
+        })
+
         itinerary = []
+        # Distribute attractions across days: 2 per day, cycling if needed
         for day in range(1, days + 1):
-            attraction = destination.attractions[day - 1] if len(destination.attractions) >= day else destination.attractions[0]
-            itinerary.append(
-                {
-                    "day_number": day,
-                    "date": None,
-                    "title": f"Explore {destination.destination.city} - Day {day}",
-                    "activities": [
-                        {
-                            "time": "09:00",
-                            "duration_minutes": 120,
-                            "activity": f"Visit {attraction.name}",
-                            "location": attraction.location.model_dump(),
-                            "cost_usd": min(20.0, attraction.entry_fee),
-                        },
-                        {
-                            "time": "13:00",
-                            "duration_minutes": 90,
-                            "activity": "Lunch at a local restaurant",
-                            "location": destination.destination.model_dump(),
-                            "cost_usd": 30.0,
-                        },
-                        {
-                            "time": "15:00",
-                            "duration_minutes": 90,
-                            "activity": "Relax at the hotel and explore nearby spots",
-                            "location": destination.selected_hotel.location.model_dump(),
-                            "cost_usd": 10.0,
-                        },
-                    ],
-                    "meals": {
-                        "breakfast": "Hotel breakfast",
-                        "lunch": "Local restaurant",
-                        "dinner": "Street food or casual dining",
-                    },
-                    "hotel_check_in": "14:00" if day == 1 else None,
-                    "hotel_check_out": "11:00" if day == days else None,
-                    "estimated_cost": round(destination.estimated_cost_per_day, 2),
-                    "transportation_needed": ["Local taxi", "Walking"],
-                    "notes": "Keep the day relaxed and easy to navigate.",
-                }
-            )
- 
-        total_cost = round(destination.estimated_cost_per_day * days, 2)
-        hotel_cost = round(destination.selected_hotel.price_per_night * days, 2)
-        other_cost = round(total_cost - hotel_cost, 2)
- 
+            # Pick 2 attractions for this day
+            a1 = attractions[(day * 2 - 2) % n]
+            a2 = attractions[(day * 2 - 1) % n]
+
+            activities = [
+                {"time": "08:00", "duration_minutes": 45,  "activity": meals_tmpl["b"],
+                 "location": city, "cost_usd": 5.0},
+                {"time": "09:30", "duration_minutes": int(a1.visit_duration_hours * 60),
+                 "activity": f"Visit {a1.name}",
+                 "location": a1.name, "cost_usd": a1.entry_fee},
+                {"time": "12:30", "duration_minutes": 60,  "activity": meals_tmpl["l"],
+                 "location": city, "cost_usd": 12.0},
+                {"time": "14:30", "duration_minutes": int(a2.visit_duration_hours * 60),
+                 "activity": f"Explore {a2.name}",
+                 "location": a2.name, "cost_usd": a2.entry_fee},
+                {"time": "17:30", "duration_minutes": 60,  "activity": "Evening stroll and local shopping",
+                 "location": city, "cost_usd": 10.0},
+                {"time": "19:30", "duration_minutes": 90,  "activity": meals_tmpl["d"],
+                 "location": city, "cost_usd": 20.0},
+            ]
+
+            day_cost = sum(act["cost_usd"] for act in activities)
+            itinerary.append(ItineraryDay(
+                day_number=day,
+                date=None,
+                title=f"Day {day} — {a1.name} & {a2.name}",
+                activities=activities,
+                meals={"breakfast": meals_tmpl["b"], "lunch": meals_tmpl["l"], "dinner": meals_tmpl["d"]},
+                hotel_check_in="14:00" if day == 1 else None,
+                hotel_check_out="11:00" if day == days else None,
+                estimated_cost=round(day_cost, 2),
+                transportation_needed=["Metro", "Walking", "Auto-rickshaw"],
+                notes=f"Book tickets for {a1.name} in advance. Carry water and sunscreen.",
+            ))
+
+        route_logistics = getattr(self, 'last_route_logistics', None)
+        from backend.utils.cost_calculator import calculate_plan_costs
+        summary = calculate_plan_costs(user_input, destination, route_logistics, None)
+
         return ScheduleOutput(
             destination=destination.destination,
             start_date=None,
             end_date=None,
-            daily_itinerary=[
-                ItineraryDay(**day) for day in itinerary
-            ],
-            total_estimated_cost=total_cost,
-            accommodation_cost=hotel_cost,
-            food_cost=other_cost * 0.5,
-            transport_cost=other_cost * 0.3,
-            activities_cost=other_cost * 0.2,
-            transportation_method="flight",
-            transportation_details="Local transport and airport transfers",
+            daily_itinerary=itinerary,
+            total_estimated_cost=summary.total_cost,
+            accommodation_cost=summary.hotel_cost,
+            food_cost=summary.food_cost,
+            transport_cost=summary.transport_cost,
+            activities_cost=summary.activities_cost,
+            transportation_method=getattr(user_input, 'transportation', 'flight') if user_input else 'flight',
+            transportation_details="Local metro, taxis, and walking recommended.",
             packing_recommendations=[
-                "Comfortable shoes",
-                "Light weather layers",
-                "Travel adapter",
+                "Comfortable walking shoes",
+                "Universal travel adapter",
+                "Light layers for weather changes",
+                "Portable charger",
+                "Travel insurance documents",
             ],
             critical_notes=[
-                f"Book the hotel in advance for {destination.destination.city}",
+                f"Book {destination.selected_hotel.name} at least 2 weeks in advance.",
+                f"Check visa requirements for {destination.destination.country}.",
+                "Carry local currency for small vendors.",
             ],
         )
  

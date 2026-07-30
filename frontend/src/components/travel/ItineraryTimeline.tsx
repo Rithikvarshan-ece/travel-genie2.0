@@ -1,36 +1,33 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Card, CardContent } from '@/components/ui/Card';
+import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
-import { 
-  ChevronDown, ChevronUp, Sun, Sunset, Moon, Coffee,
-  DollarSign, Thermometer, MapPin
-} from 'lucide-react';
-import type { DayPlan, TimeSlot, Activity } from '@/types/travel';
+import { ChevronDown, ChevronUp, Sun, Sunset, Moon, Coffee, Thermometer, MapPin, IndianRupee } from 'lucide-react';
+import type { DayPlan } from '@/types/travel';
+
+const fmt = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+const INR = (v: number | undefined | null) => { const n = v ?? NaN; return isFinite(n) ? fmt.format(n * 83) : '₹N/A'; };
+const toINR = (s: string) => s?.startsWith('$') ? fmt.format(parseFloat(s.replace('$', '')) * 83) : (s || '');
 
 interface ItineraryTimelineProps {
-  data: { days: DayPlan[]; summary: any; travel_tips: string[] };
+  data: { days: DayPlan[]; summary?: any; travel_tips?: string[] };
 }
 
-const slotIcons: Record<string, React.ElementType> = {
-  morning: Coffee,
-  afternoon: Sun,
-  evening: Sunset,
-  night: Moon,
-};
-
-const slotColors: Record<string, string> = {
-  morning: 'amber',
-  afternoon: 'orange',
-  evening: 'indigo',
-  night: 'purple',
+const slotIcons: Record<string, React.ElementType> = { morning: Coffee, afternoon: Sun, evening: Sunset, night: Moon };
+const slotGradients: Record<string, string> = {
+  morning:   'from-amber-400 to-orange-400',
+  afternoon: 'from-orange-400 to-red-400',
+  evening:   'from-indigo-400 to-purple-500',
+  night:     'from-purple-600 to-slate-700',
 };
 
 export default function ItineraryTimeline({ data }: ItineraryTimelineProps) {
-  const { days, summary, travel_tips } = data;
-  const [expandedDay, setExpandedDay] = useState<number>(1);
+  const days = data?.days ?? [];
+  const summary = data?.summary;
+  const travel_tips = data?.travel_tips ?? [];
+  const [expandedDay, setExpandedDay] = useState<number>(days[0]?.day ?? 1);
 
-  if (!days || days.length === 0) {
+  if (days.length === 0) {
     return (
       <Card glass className="p-6">
         <p className="text-slate-500 dark:text-slate-400">Itinerary data not available</p>
@@ -40,156 +37,139 @@ export default function ItineraryTimeline({ data }: ItineraryTimelineProps) {
 
   return (
     <Card glass className="p-6">
-      <div className="mb-6">
+      {/* Header */}
+      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <h3 className="text-xl font-bold text-slate-900 dark:text-white">Your Itinerary</h3>
         {summary && (
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            {summary.total_days} days • {summary.total_activities} activities • Est. ${summary.estimated_total_cost}
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+            {summary.total_days} days • {summary.total_activities} activities
+            {summary.estimated_total_cost ? ` • Est. ${INR(summary.estimated_total_cost)}` : ''}
           </p>
         )}
-      </div>
+      </motion.div>
 
-      {/* Timeline */}
-      <div className="relative">
-        {days.map((day, dayIndex) => (
-          <motion.div
-            key={dayIndex}
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: dayIndex * 0.1 }}
-            className="mb-4 last:mb-0"
-          >
-            <div
-              onClick={() => setExpandedDay(expandedDay === day.day ? -1 : day.day)}
-              className="flex items-center justify-between p-4 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white cursor-pointer hover:shadow-lg transition-shadow"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center font-bold text-lg">
-                  {day.day}
-                </div>
-                <div>
-                  <h4 className="font-semibold">{day.title || `Day ${day.day}`}</h4>
-                  <div className="flex items-center gap-2 text-xs text-indigo-100">
-                    <span>{day.date}</span>
-                    {day.daily_cost_estimate && (
-                      <>
-                        <span>•</span>
-                        <span>${day.daily_cost_estimate} est.</span>
-                      </>
-                    )}
+      {/* Day cards */}
+      <div className="space-y-3">
+        {days.map((day, dayIndex) => {
+          const isOpen = expandedDay === day.day;
+          return (
+            <motion.div key={day.day}
+              initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: dayIndex * 0.07 }}>
+
+              {/* Day header */}
+              <button onClick={() => setExpandedDay(isOpen ? -1 : day.day)}
+                className="w-full flex items-center justify-between p-4 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:shadow-lg hover:scale-[1.01] transition-all">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center font-bold text-lg shrink-0">
+                    {day.day}
+                  </div>
+                  <div className="text-left">
+                    <p className="font-semibold">{day.title || `Day ${day.day}`}</p>
+                    <div className="flex items-center gap-2 text-xs text-indigo-100 flex-wrap">
+                      {day.date && <span>{day.date}</span>}
+                      {day.daily_cost_estimate != null && day.daily_cost_estimate > 0 && (
+                        <><span>•</span><span>{INR(day.daily_cost_estimate)} est.</span></>
+                      )}
+                      {day.hotel && <><span>•</span><span>🏨 {day.hotel}</span></>}
+                    </div>
                   </div>
                 </div>
-              </div>
-              {expandedDay === day.day ? (
-                <ChevronUp className="w-5 h-5" />
-              ) : (
-                <ChevronDown className="w-5 h-5" />
-              )}
-            </div>
+                {isOpen ? <ChevronUp className="w-5 h-5 shrink-0" /> : <ChevronDown className="w-5 h-5 shrink-0" />}
+              </button>
 
-            <AnimatePresence>
-              {expandedDay === day.day && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="overflow-hidden"
-                >
-                  <div className="p-4 space-y-3">
-                    {/* Weather note */}
-                    {day.weather && (
-                      <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
-                        <Thermometer className="w-4 h-4" />
-                        <span>
-                          {day.weather.condition} • {day.weather.temperature_c}°C
-                        </span>
-                        <span className="text-xs">
-                          (Humidity: {day.weather.humidity}% • Wind: {day.weather.wind_speed_kmh}km/h)
-                        </span>
-                      </div>
-                    )}
+              {/* Expanded content */}
+              <AnimatePresence>
+                {isOpen && (
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                    <div className="pt-3 pb-1 px-1 space-y-3">
 
-                    {/* Hotel info */}
-                    <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-                      <MapPin className="w-4 h-4" />
-                      <span>Stay at: {day.hotel}</span>
-                    </div>
+                      {/* Weather strip */}
+                      {day.weather && (
+                        <div className="flex items-center gap-3 p-3 rounded-xl bg-sky-50 dark:bg-sky-900/20 border border-sky-100 dark:border-sky-800 text-sm text-sky-700 dark:text-sky-300">
+                          <Thermometer className="w-4 h-4 shrink-0" />
+                          <span className="font-medium capitalize">{day.weather.condition}</span>
+                          <span>{day.weather.temperature_c}°C</span>
+                          <span className="text-xs text-sky-500">💧{day.weather.humidity}% 💨{day.weather.wind_speed_kmh}km/h</span>
+                        </div>
+                      )}
 
-                    {/* Time slots */}
-                    {day.slots?.map((slot, slotIndex) => {
-                      const SlotIcon = slotIcons[slot.slot] || Sun;
-                      const color = slotColors[slot.slot] || 'indigo';
-                      return (
-                        <div key={slotIndex} className="relative pl-6 border-l-2 border-indigo-200 dark:border-indigo-800">
-                          <div className={`absolute -left-2.5 top-0 w-5 h-5 rounded-full bg-${color}-100 dark:bg-${color}-900/50 flex items-center justify-center`}>
-                            <SlotIcon className={`w-3 h-3 text-${color}-600 dark:text-${color}-400`} />
-                          </div>
-                          <div className="mb-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                                {slot.label}
-                              </span>
-                              <span className="text-xs text-slate-400">{slot.hours}</span>
+                      {/* Time slots */}
+                      {(day.slots ?? []).map((slot, si) => {
+                        const SlotIcon = slotIcons[slot.slot] || Sun;
+                        const grad = slotGradients[slot.slot] || 'from-indigo-400 to-purple-500';
+                        return (
+                          <div key={si} className="relative pl-8 border-l-2 border-indigo-200 dark:border-indigo-800 ml-2">
+                            {/* Timeline dot */}
+                            <div className={`absolute -left-3 top-1 w-6 h-6 rounded-full bg-gradient-to-br ${grad} flex items-center justify-center shadow`}>
+                              <SlotIcon className="w-3 h-3 text-white" />
                             </div>
-                            {slot.weather_note && (
-                              <p className="text-xs text-slate-500 dark:text-slate-400">{slot.weather_note}</p>
-                            )}
-                          </div>
-                          <div className="space-y-2">
-                            {slot.activities?.map((activity, actIndex) => (
-                              <div key={actIndex} className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50">
-                                <div className="flex items-start justify-between">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-lg">{activity.icon}</span>
-                                    <div>
-                                      <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                                        {activity.activity}
-                                      </p>
-                                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                                        {activity.description}
-                                      </p>
+
+                            <div className="mb-1 flex items-center gap-2">
+                              <span className="text-sm font-semibold text-slate-700 dark:text-slate-300 capitalize">{slot.label || slot.slot}</span>
+                              {slot.hours && <span className="text-xs text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-full">{slot.hours}</span>}
+                            </div>
+
+                            <div className="space-y-2">
+                              {(slot.activities ?? []).map((act, ai) => (
+                                <motion.div key={ai}
+                                  initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
+                                  transition={{ delay: ai * 0.05 }}
+                                  className="p-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 shadow-sm hover:shadow-md transition-shadow">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="flex items-start gap-2 min-w-0">
+                                      <span className="text-base shrink-0">{act.icon || '📍'}</span>
+                                      <div className="min-w-0">
+                                        <p className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">{act.activity}</p>
+                                        {act.description && act.description !== act.activity && (
+                                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{act.description}</p>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="text-right shrink-0">
+                                      {act.duration && <p className="text-xs text-slate-400">{act.duration}</p>}
+                                      {act.cost && act.cost !== '₹0' && act.cost !== '$0' && (
+                                        <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400">{toINR(act.cost)}</p>
+                                      )}
                                     </div>
                                   </div>
-                                  <div className="text-right text-xs text-slate-500 dark:text-slate-400">
-                                    <p>{activity.duration}</p>
-                                    <p className="text-indigo-600 dark:text-indigo-400 font-medium">{activity.cost}</p>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
+                                </motion.div>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
 
-                    {/* Highlights */}
-                    {day.highlights && day.highlights.length > 0 && (
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {day.highlights.map((h, i) => (
-                          <Badge key={i} variant="success" size="sm">✨ {h}</Badge>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </motion.div>
-        ))}
+                      {/* Highlights */}
+                      {day.highlights && day.highlights.length > 0 && (
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {day.highlights.map((h, i) => (
+                            <Badge key={i} variant="success" size="sm">✨ {h}</Badge>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          );
+        })}
       </div>
 
       {/* Travel Tips */}
-      {travel_tips && travel_tips.length > 0 && (
-        <div className="mt-6 p-4 rounded-xl bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800">
-          <h4 className="text-sm font-semibold text-indigo-700 dark:text-indigo-300 mb-2">🧳 Travel Tips</h4>
+      {travel_tips.length > 0 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }}
+          className="mt-6 p-4 rounded-xl bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800">
+          <h4 className="text-sm font-semibold text-indigo-700 dark:text-indigo-300 mb-3">🧳 Travel Tips</h4>
           <div className="grid md:grid-cols-2 gap-2">
             {travel_tips.map((tip, i) => (
               <p key={i} className="text-sm text-indigo-600 dark:text-indigo-400">• {tip}</p>
             ))}
           </div>
-        </div>
+        </motion.div>
       )}
     </Card>
   );
 }
-

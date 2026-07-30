@@ -4,9 +4,9 @@ import { motion } from 'framer-motion';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { 
-  Brain, Sparkles, Globe, Wallet, CloudSun, 
-  Route, Hotel, MapPin, Calendar, BarChart3,
-  Shield, Github, ChevronRight, Heart,
+  Brain, Sparkles, Globe, Wallet,
+  Route, Calendar, BarChart3,
+  Shield, ChevronRight,
   Users, Code, Zap, CheckCircle2
 } from 'lucide-react';
 
@@ -16,22 +16,19 @@ const fadeInUp = {
 };
 
 const agents = [
-  { icon: Brain, name: 'Planner Agent', desc: 'Main coordinator that orchestrates the entire travel planning process', color: 'text-indigo-500', bg: 'bg-indigo-50 dark:bg-indigo-900/20' },
-  { icon: Wallet, name: 'Budget Agent', desc: 'Calculates optimal budget allocation across all travel categories', color: 'text-emerald-500', bg: 'bg-emerald-50 dark:bg-emerald-900/20' },
-  { icon: Globe, name: 'Destination Agent', desc: 'Suggests best destinations based on preferences, budget, and season', color: 'text-blue-500', bg: 'bg-blue-50 dark:bg-blue-900/20' },
-  { icon: CloudSun, name: 'Weather Agent', desc: 'Checks weather conditions and provides activity recommendations', color: 'text-amber-500', bg: 'bg-amber-50 dark:bg-amber-900/20' },
-  { icon: Route, name: 'Transport Agent', desc: 'Compares flights, trains, buses, and cars with cost-time analysis', color: 'text-cyan-500', bg: 'bg-cyan-50 dark:bg-cyan-900/20' },
-  { icon: Hotel, name: 'Hotel Agent', desc: 'Recommends hotels based on budget, ratings, and location preferences', color: 'text-purple-500', bg: 'bg-purple-50 dark:bg-purple-900/20' },
-  { icon: MapPin, name: 'Attraction Agent', desc: 'Curates must-visit places with tips, timing, and cost estimates', color: 'text-pink-500', bg: 'bg-pink-50 dark:bg-pink-900/20' },
-  { icon: Calendar, name: 'Itinerary Agent', desc: 'Creates detailed day-by-day schedules with time-slot activities', color: 'text-orange-500', bg: 'bg-orange-50 dark:bg-orange-900/20' },
-  { icon: BarChart3, name: 'Expense Agent', desc: 'Tracks all expenses and provides budget utilization analysis', color: 'text-red-500', bg: 'bg-red-50 dark:bg-red-900/20' },
+  { icon: Brain,    name: 'Planner Agent',           desc: 'Main coordinator that orchestrates the entire 6-agent travel planning pipeline',          color: 'text-indigo-500',  bg: 'bg-indigo-50 dark:bg-indigo-900/20'  },
+  { icon: Wallet,   name: 'Trip Feasibility Agent',  desc: 'Validates trip feasibility and calculates optimal budget allocation across all categories', color: 'text-emerald-500', bg: 'bg-emerald-50 dark:bg-emerald-900/20' },
+  { icon: Globe,    name: 'Destination Agent',       desc: 'Selects best destination using real-time weather, hotels, and attractions data',           color: 'text-blue-500',    bg: 'bg-blue-50 dark:bg-blue-900/20'      },
+  { icon: Route,    name: 'Route & Logistics Agent', desc: 'Calculates travel distance, time, and compares all transport modes with cost analysis',    color: 'text-cyan-500',    bg: 'bg-cyan-50 dark:bg-cyan-900/20'      },
+  { icon: Calendar, name: 'Schedule Agent',          desc: 'Creates detailed day-by-day itinerary with time-slot activities and meal recommendations',  color: 'text-orange-500',  bg: 'bg-orange-50 dark:bg-orange-900/20'  },
+  { icon: BarChart3,name: 'Validation Agent',        desc: 'Validates the complete plan, checks budget compliance, and triggers self-correction if needed', color: 'text-red-500',  bg: 'bg-red-50 dark:bg-red-900/20'        },
 ];
 
 const features = [
   { icon: Zap, title: 'Instant Planning', desc: 'Get a complete travel plan in seconds, not hours' },
   { icon: Shield, title: 'Budget Smart', desc: 'Optimized budget allocation ensuring you get the best value' },
   { icon: Users, title: 'Personalized', desc: 'Tailored recommendations based on your unique preferences' },
-  { icon: Code, title: 'Multi-Agent AI', desc: '9 specialized AI agents collaborate for comprehensive planning' },
+  { icon: Code, title: 'Multi-Agent AI', desc: '6 specialized AI agents collaborate for comprehensive planning' },
 ];
 
 export default function AboutPage() {
@@ -48,8 +45,8 @@ export default function AboutPage() {
             About <span className="text-gradient">TravelGenie</span>
           </motion.h1>
           <motion.p variants={fadeInUp} className="text-lg text-slate-600 dark:text-slate-400 max-w-3xl mx-auto">
-            TravelGenie is an intelligent travel planning platform powered by a multi-agent AI system. 
-            Nine specialized agents work together to create personalized, budget-friendly travel itineraries 
+            TravelGenie is an intelligent travel planning platform powered by a multi-agent AI system.
+            Six specialized agents work together to create personalized, budget-friendly travel itineraries
             that adapt to your unique preferences.
           </motion.p>
         </div>
@@ -60,7 +57,7 @@ export default function AboutPage() {
           <div className="grid md:grid-cols-3 gap-6">
             {[
               { step: '1', title: 'Share Preferences', desc: 'Tell us your budget, destination preferences, interests, and travel style.' },
-              { step: '2', title: 'AI Agents Collaborate', desc: 'Nine specialized agents analyze budget, weather, transport, hotels, and attractions.' },
+              { step: '2', title: 'AI Agents Collaborate', desc: 'Six specialized agents analyze budget, destination, weather, transport, hotels, and schedule.' },
               { step: '3', title: 'Get Your Plan', desc: 'Receive a comprehensive itinerary with daily schedules, expenses, and tips.' },
             ].map((item, i) => (
               <Card key={i} glass className="p-6 text-center">
@@ -78,7 +75,7 @@ export default function AboutPage() {
         <motion.div variants={fadeInUp} className="mb-16">
           <div className="text-center mb-8">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">The Multi-Agent System</h2>
-            <p className="text-slate-600 dark:text-slate-400">Nine specialized AI agents working in harmony</p>
+            <p className="text-slate-600 dark:text-slate-400">Six specialized AI agents working in harmony</p>
           </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
             {agents.map((agent, i) => {

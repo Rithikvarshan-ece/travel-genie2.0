@@ -71,50 +71,28 @@ class GroqService:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> str:
-        """
-        Invoke the LLM asynchronously.
-        
-        Args:
-            system_prompt: System message for the LLM
-            user_prompt: User message/query
-            temperature: Optional temperature override
-            max_tokens: Optional max tokens override
-            
-        Returns:
-            LLM response text
-        """
         try:
-            # Create messages
             messages = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt),
             ]
-
-            # Prepare LLM with optional overrides
             llm = self.llm
             if temperature is not None or max_tokens is not None:
                 llm = self._create_configured_llm(temperature, max_tokens)
-
             if llm is None:
-                raise RuntimeError("Groq client is not configured")
-
-            # Run in thread pool to avoid blocking
+                raise RuntimeError("Groq client is not configured — set GROQ_API_KEY in .env")
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None, lambda: llm.invoke(messages)
             )
-
-            # Extract text
             result_text = getattr(response, 'content', str(response))
-
-            # Track tokens (approximate if exact not available)
             self._track_tokens(result_text)
-
             logger.debug(f"LLM invocation successful ({len(result_text)} chars)")
             return result_text
-
+        except RuntimeError:
+            raise
         except Exception as e:
-            logger.error(f"Error LLM invocation failed: {e}")
+            logger.error(f"LLM invocation failed: {e}")
             raise
 
     def sync_invoke(

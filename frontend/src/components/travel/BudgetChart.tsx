@@ -40,14 +40,21 @@ const COLORS = {
   emergency: '#8B5CF6',
 };
 
+// INR formatter — multiplies backend values by 83
+const INR = (v: number | string | undefined | null): string => {
+  const n = typeof v === 'string' ? parseFloat(v) : (v ?? NaN);
+  if (!isFinite(n)) return '₹N/A';
+  return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n * 83);
+};
+
 const CustomTooltip = ({ active, payload }: any) => {
   if (active && payload && payload.length) {
-    const data = payload[0].payload;
+    const d = payload[0].payload;
     return (
       <div className="bg-white dark:bg-slate-800 p-3 rounded-xl shadow-lg border border-slate-200 dark:border-slate-700">
-        <p className="font-semibold text-slate-900 dark:text-white">{data.label}</p>
-        <p className="text-sm text-slate-600 dark:text-slate-400">${data.amount.toFixed(2)}</p>
-        <p className="text-sm text-slate-500 dark:text-slate-500">{data.percentage}%</p>
+        <p className="font-semibold text-slate-900 dark:text-white">{d.label}</p>
+        <p className="text-sm text-slate-600 dark:text-slate-400">{INR(d.amount)}</p>
+        <p className="text-sm text-slate-500">{d.percentage}%</p>
       </div>
     );
   }
@@ -56,6 +63,11 @@ const CustomTooltip = ({ active, payload }: any) => {
 
 export default function BudgetChart({ data }: BudgetChartProps) {
   const { breakdown, total_budget, daily_budget, budget_level, optimization_tips } = data;
+
+  // daily_budget may be a number (from backend) or an object — handle both safely
+  const perDayTotal: number = typeof daily_budget === 'number'
+    ? daily_budget
+    : (daily_budget as any)?.per_day_total ?? (daily_budget as any)?.per_person_per_day ?? 0;
 
   const chartData = Object.entries(breakdown).map(([key, val]) => ({
     name: key,
@@ -67,20 +79,20 @@ export default function BudgetChart({ data }: BudgetChartProps) {
 
   return (
     <Card glass className="p-6">
-      <div className="flex items-center justify-between mb-6">
+      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between mb-6">
         <div>
           <h3 className="text-xl font-bold text-slate-900 dark:text-white">Budget Breakdown</h3>
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            Total: ${total_budget.toLocaleString()} • {budget_level}
+            Total: {INR(total_budget)} • {budget_level}
           </p>
         </div>
         <div className="text-right">
           <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">
-            ${daily_budget.per_day_total.toFixed(0)}
+            {INR(perDayTotal)}
           </p>
           <p className="text-xs text-slate-500 dark:text-slate-400">per day</p>
         </div>
-      </div>
+      </motion.div>
 
       <div className="grid md:grid-cols-2 gap-6">
         {/* Pie Chart */}
@@ -128,7 +140,7 @@ export default function BudgetChart({ data }: BudgetChartProps) {
                 </div>
               </div>
               <div className="text-right">
-                <p className="text-sm font-semibold text-slate-900 dark:text-white">${item.amount.toFixed(0)}</p>
+                <p className="text-sm font-semibold text-slate-900 dark:text-white">{INR(item.amount)}</p>
                 <p className="text-xs text-slate-500 dark:text-slate-400">{item.percentage}%</p>
               </div>
             </motion.div>

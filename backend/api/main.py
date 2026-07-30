@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 # from .routes import router as sync_router  # Old v1 routes - deprecated
 from .async_routes import router as async_router
+from .auth_routes import router as auth_router
 from ..database.database import init_db
 import logging
 
@@ -39,19 +40,45 @@ app.add_middleware(
 
 # Include API routes (v2 only - new async agent system)
 app.include_router(async_router)
+app.include_router(auth_router)
 
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize the database on startup."""
+    """Initialize the database and verify all connections on startup."""
     logger.info("Starting TravelGenie Backend...")
+
+    # SQLite init
     try:
         init_db()
-        logger.info("Database initialized successfully")
+        logger.info("SQLite database initialized successfully")
     except Exception as e:
-        logger.error(f"Error Database initialization failed: {e}")
-    
-    logger.info("✨ TravelGenie API v2.0 is ready!")
+        logger.error(f"SQLite initialization failed: {e}")
+
+    # MongoDB connectivity check
+    from backend.config import get_settings
+    settings = get_settings()
+    if settings.mongodb_url:
+        try:
+            from pymongo import MongoClient
+            client = MongoClient(
+                settings.mongodb_url,
+                serverSelectionTimeoutMS=10000,
+                connectTimeoutMS=10000,
+            )
+            result = client.admin.command("ping")
+            client.close()
+            logger.info(f"MongoDB Atlas ping OK: {result}")
+        except Exception as e:
+            logger.warning(
+                f"MongoDB Atlas unreachable: {e}. "
+                "Check that IP 103.183.240.250 is whitelisted in Atlas Network Access. "
+                "Cache will use SQLite fallback."
+            )
+    else:
+        logger.info("MONGODB_URL not set — using SQLite cache fallback")
+
+    logger.info("\u2728 TravelGenie API v2.0 is ready!")
 
 
 @app.on_event("shutdown")

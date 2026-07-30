@@ -124,54 +124,37 @@ class AsyncBaseAgent(ABC):
         """
         pass
 
-    async def invoke(self, input_model: BaseModel) -> BaseModel:
+    async def invoke(self, input_model: BaseModel, _retries: int = 3) -> BaseModel:
         """
-        Invoke the agent with metrics tracking.
-        
-        Args:
-            input_model: Input Pydantic model
-            
-        Returns:
-            Output Pydantic model
-            
-        Raises:
-            AgentException: If execution fails
+        Invoke the agent with metrics tracking and automatic retry (3 attempts).
         """
         metrics = AgentMetrics(self.name)
-        
-        try:
-            self.logger.info(f"Starting {self.name} agent")
-            if hasattr(input_model, "model_dump_json"):
-                self.logger.debug(f"Input: {input_model.model_dump_json()}")
-            else:
-                self.logger.debug(f"Input: {input_model}")
-            
-            # Process
-            output = await self.process(input_model)
-            
-            # Mark complete
-            metrics.mark_complete()
-            self.logger.info(
-                f"✅ {self.name} completed in {metrics.duration_seconds:.2f}s"
-            )
-            self.logger.debug(f"Output: {output.model_dump_json()}")
-            
-            # Store metrics in output if possible
-            if hasattr(output, '__dict__'):
-                output._agent_metrics = metrics
-            
-            return output
-            
-        except AgentException as e:
-            metrics.mark_complete()
-            metrics.error = str(e)
-            self.logger.error(f"Error {self.name} failed: {e}")
-            raise
-        except Exception as e:
-            metrics.mark_complete()
-            metrics.error = str(e)
-            self.logger.error(f"Error {self.name} failed with unexpected error: {e}")
-            raise AgentException(self.name, f"Unexpected error: {str(e)}", e)
+        last_exc: Exception = None
+
+        for attempt in range(1, _retries + 1):
+            try:
+                self.logger.info(f"Starting {self.name} agent (attempt {attempt})")
+                output = await self.process(input_model)
+                metrics.mark_complete()
+                self.logger.info(f"✅ {self.name} completed in {metrics.duration_seconds:.2f}s")
+                if hasattr(output, '__dict__'):
+                    output._agent_metrics = metrics
+                return output
+            except AgentException as e:
+                last_exc = e
+                metrics.error = str(e)
+                self.logger.warning(f"⚠️ {self.name} attempt {attempt} failed: {e}")
+                if attempt < _retries:
+                    await __import__('asyncio').sleep(0.5 * attempt)
+            except Exception as e:
+                last_exc = AgentException(self.name, f"Unexpected error: {str(e)}", e)
+                self.logger.warning(f"⚠️ {self.name} attempt {attempt} unexpected error: {e}")
+                if attempt < _retries:
+                    await __import__('asyncio').sleep(0.5 * attempt)
+
+        metrics.mark_complete()
+        self.logger.error(f"❌ {self.name} failed after {_retries} attempts")
+        raise last_exc
 
     async def query_llm(
         self,
@@ -180,20 +163,7 @@ class AsyncBaseAgent(ABC):
         temperature: Optional[float] = None,
         output_model: Optional[Type[BaseModel]] = None,
     ) -> Any:
-        """
-        Query the Groq LLM using the shared service.
-        
-        Args:
-            user_prompt: User query/prompt
-            system_prompt: Optional custom system prompt
-            temperature: Optional temperature override
-            output_model: Optional Pydantic model to parse the response into
-        
-        Returns:
-            LLM response text or parsed Pydantic model
-        """
         sys_prompt = system_prompt or self.get_system_prompt()
-        
         try:
             response = await self.groq_service.async_invoke(
                 system_prompt=sys_prompt,
@@ -206,14 +176,18 @@ class AsyncBaseAgent(ABC):
         except Exception as e:
             self.logger.error(f"LLM query failed: {e}")
             if self.settings.use_fallback_seeded_data and hasattr(self, 'fallback_response'):
-                self.logger.warning("Warning Falling back to internal response generator")
-                fallback = await self.fallback_response(user_prompt, sys_prompt, output_model)
-                return fallback
+                self.logger.warning(f"Falling back to internal response generator for {self.name}")
+                return await self.fallback_response(user_prompt, sys_prompt, output_model)
             raise AgentException(self.name, f"LLM query failed: {str(e)}", e)
 
     def parse_json_output(self, text: str, output_model: Type[BaseModel]) -> BaseModel:
         """
         Parse JSON output from LLM into Pydantic model.
+        
+        Handles common LLM quirks:
+        - Extracts JSON from markdown code blocks (```json ... ```)
+        - Unwraps nested structures where the top-level JSON has a single key
+          whose value is a dict (e.g., {"validation_results": {"is_valid": ...}})
         
         Args:
             text: Text response from LLM (should be JSON)
@@ -239,6 +213,19 @@ class AsyncBaseAgent(ABC):
             
             # Parse JSON
             json_obj = json.loads(json_str)
+            
+            # Unwrap nested structures: if the top-level JSON has a single key
+            # whose value is a dict, try to validate the inner dict instead.
+            # This handles LLMs that wrap output like {"validation_results": {...}}
+            if isinstance(json_obj, dict) and len(json_obj) == 1:
+                inner = next(iter(json_obj.values()))
+                if isinstance(inner, dict):
+                    try:
+                        return output_model.model_validate(inner)
+                    except Exception:
+                        # Inner dict didn't match — fall through to validate the
+                        # original top-level object
+                        pass
             
             # Validate and create Pydantic model
             return output_model.model_validate(json_obj)

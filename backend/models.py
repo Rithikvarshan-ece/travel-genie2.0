@@ -53,6 +53,7 @@ class UserTravelInput(BaseModel):
     
     budget: float = Field(..., gt=0, description="Total trip budget in USD")
     source_city: str = Field(..., min_length=2, description="Departure city")
+    destination_city: Optional[str] = Field(None, description="Desired destination city (optional)")
     trip_days: int = Field(..., ge=1, le=90, description="Number of days")
     travel_type: TravelStyle = Field(..., description="Travel group type")
     transportation: TransportMode = Field(..., description="Primary transport mode")
@@ -223,6 +224,28 @@ class ItineraryDay(BaseModel):
     
     notes: Optional[str] = Field(None, description="Important notes or tips")
 
+    @field_validator("meals", mode="before")
+    @classmethod
+    def normalize_meals(cls, v: Any) -> Dict[str, str]:
+        defaults = {
+            "breakfast": "Breakfast at hotel or local café",
+            "lunch": "Lunch at a local restaurant",
+            "dinner": "Dinner at a local restaurant",
+        }
+        if not isinstance(v, dict):
+            return defaults
+        res = {}
+        for m_key in ["breakfast", "lunch", "dinner"]:
+            val = v.get(m_key)
+            if val is None or not isinstance(val, str) or not val.strip():
+                res[m_key] = defaults[m_key]
+            else:
+                res[m_key] = val.strip()
+        for k, val in v.items():
+            if k not in res and val is not None:
+                res[k] = str(val)
+        return res
+
 
 class ScheduleOutput(BaseModel):
     """Schedule Agent output."""
@@ -255,6 +278,28 @@ class ScheduleOutput(BaseModel):
         default_factory=list,
         description="Important information about the destination or trip"
     )
+
+    @field_validator("transportation_method", mode="before")
+    @classmethod
+    def normalize_transportation(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            val_lower = v.strip().lower()
+            if val_lower in ("flight", "plane", "air", "airplane", "fly"):
+                return TransportMode.FLIGHT
+            elif val_lower in ("train", "rail", "railway", "subway", "metro", "tram"):
+                return TransportMode.TRAIN
+            elif val_lower in ("bus", "shuttle", "coach"):
+                return TransportMode.BUS
+            elif val_lower in (
+                "car", "cab", "taxi", "auto", "ride share", "rideshare",
+                "local transport", "local", "driving", "drive", "vehicle"
+            ):
+                return TransportMode.CAR
+            for mode in TransportMode:
+                if mode.value in val_lower:
+                    return mode
+            return TransportMode.CAR
+        return v
 
 
 class ValidationIssue(BaseModel):
@@ -291,6 +336,22 @@ class ValidationOutput(BaseModel):
     confidence_score: float = Field(..., ge=0, le=1, description="Confidence in validation")
 
 
+class PlannerOutput(BaseModel):
+    """Planner Agent output — coordination summary."""
+
+    destination: str = Field(..., description="Selected destination city")
+    duration: str = Field(..., description="Trip duration string")
+    total_budget: float = Field(..., description="Total budget in USD")
+    within_budget: bool = Field(..., description="Whether plan is within budget")
+    estimated_total_cost: float = Field(..., description="Estimated total cost")
+    reasoning_steps: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Step-by-step coordination log"
+    )
+    coordination_notes: str = Field(default="", description="Planner coordination summary")
+    confidence_score: float = Field(..., ge=0, le=1, description="Overall plan confidence")
+
+
 class FinalTravelPlan(BaseModel):
     """Final complete travel plan combining all agent outputs."""
     
@@ -301,8 +362,10 @@ class FinalTravelPlan(BaseModel):
     user_input: UserTravelInput = Field(...)
     
     # Agent outputs in sequence
+    planner: Optional['PlannerOutput'] = Field(None, description="Planner agent coordination output")
     trip_feasibility: TripFeasibilityOutput = Field(...)
     destination: DestinationOutput = Field(...)
+    route_logistics: Optional[Any] = Field(None, description="Route & Logistics agent output")
     schedule: ScheduleOutput = Field(...)
     validation: ValidationOutput = Field(...)
     

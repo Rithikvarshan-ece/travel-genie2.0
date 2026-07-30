@@ -1,23 +1,30 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import { Card, CardContent } from '@/components/ui/Card';
+import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
-import { DollarSign, TrendingUp, PiggyBank, AlertTriangle } from 'lucide-react';
+import { IndianRupee, TrendingUp, PiggyBank, AlertTriangle } from 'lucide-react';
 import type { ExpenseData } from '@/types/travel';
 
-interface ExpenseSummaryProps {
-  data: ExpenseData;
-}
+const INR = (v: number | string | undefined | null): string => {
+  const n = typeof v === 'string' ? parseFloat(v) : (v ?? NaN);
+  if (!isFinite(n)) return '₹N/A';
+  const inr = n * 83;
+  // Snap sub-₹5 values to ₹0 to avoid rounding artifacts like ₹1 or ₹2
+  const snapped = Math.abs(inr) < 5 ? 0 : inr;
+  return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(snapped);
+};
+
+interface ExpenseSummaryProps { data: ExpenseData; }
 
 const CustomTooltip = ({ active, payload }: any) => {
   if (active && payload && payload.length) {
-    const data = payload[0].payload;
+    const d = payload[0].payload;
     return (
       <div className="bg-white dark:bg-slate-800 p-3 rounded-xl shadow-lg border border-slate-200 dark:border-slate-700">
-        <p className="font-semibold text-slate-900 dark:text-white">{data.label}</p>
-        <p className="text-sm text-slate-600 dark:text-slate-400">${data.amount.toFixed(2)}</p>
-        <p className="text-sm text-slate-500 dark:text-slate-500">{data.percentage}%</p>
+        <p className="font-semibold text-slate-900 dark:text-white">{d.label}</p>
+        <p className="text-sm text-slate-600 dark:text-slate-400">{INR(d.amount)}</p>
+        <p className="text-sm text-slate-500">{d.percentage}%</p>
       </div>
     );
   }
@@ -70,13 +77,13 @@ export default function ExpenseSummary({ data }: ExpenseSummaryProps) {
       {/* Summary Stats */}
       <div className="grid grid-cols-3 gap-4 mb-6">
         <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-center">
-          <DollarSign className="w-5 h-5 text-indigo-500 mx-auto mb-1" />
-          <p className="text-2xl font-bold text-slate-900 dark:text-white">${total_cost.toFixed(0)}</p>
+          <IndianRupee className="w-5 h-5 text-indigo-500 mx-auto mb-1" />
+          <p className="text-2xl font-bold text-slate-900 dark:text-white">{INR(total_cost)}</p>
           <p className="text-xs text-slate-500 dark:text-slate-400">Total Cost</p>
         </div>
         <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-center">
           <PiggyBank className="w-5 h-5 text-green-500 mx-auto mb-1" />
-          <p className="text-2xl font-bold text-green-600 dark:text-green-400">${remaining_budget.toFixed(0)}</p>
+          <p className="text-2xl font-bold text-green-600 dark:text-green-400">{INR(remaining_budget)}</p>
           <p className="text-xs text-slate-500 dark:text-slate-400">Remaining</p>
         </div>
         <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-center">
@@ -124,7 +131,7 @@ export default function ExpenseSummary({ data }: ExpenseSummaryProps) {
                 <span className="text-sm text-slate-700 dark:text-slate-300">{item.label}</span>
               </div>
               <div className="text-right">
-                <span className="text-sm font-semibold text-slate-900 dark:text-white">${item.amount.toFixed(0)}</span>
+                <span className="text-sm font-semibold text-slate-900 dark:text-white">{INR(item.amount)}</span>
                 <span className="text-xs text-slate-400 ml-1">({item.percentage}%)</span>
               </div>
             </motion.div>

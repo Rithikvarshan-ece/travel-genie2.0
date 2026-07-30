@@ -1,9 +1,15 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Card, CardContent } from '@/components/ui/Card';
+import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Star, MapPin, Wifi, Coffee, Car, Dumbbell, Waves, Shield } from 'lucide-react';
 import type { Hotel } from '@/types/travel';
+
+const INR = (v: number | string | undefined | null): string => {
+  const n = typeof v === 'string' ? parseFloat(v) : (v ?? NaN);
+  if (!isFinite(n)) return '₹N/A';
+  return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n * 83);
+};
 
 interface HotelCardProps {
   data: { hotels: Hotel[]; top_pick: Hotel };
@@ -52,7 +58,7 @@ export default function HotelCard({ data }: HotelCardProps) {
               <Star className="w-4 h-4 text-yellow-300 fill-yellow-300 mr-1" />
               <span className="font-semibold">{top_pick.rating}</span>
             </div>
-            <span className="text-2xl font-bold">${top_pick.price_per_night}/night</span>
+            <span className="text-2xl font-bold">{INR(top_pick.price_per_night)}/night</span>
           </div>
         </div>
       )}
@@ -76,7 +82,7 @@ export default function HotelCard({ data }: HotelCardProps) {
               </div>
               <div className="text-right">
                 <p className="text-lg font-bold text-indigo-600 dark:text-indigo-400">
-                  ${hotel.price_per_night}
+                  {INR(hotel.price_per_night)}
                 </p>
                 <p className="text-xs text-slate-500 dark:text-slate-400">per night</p>
               </div>

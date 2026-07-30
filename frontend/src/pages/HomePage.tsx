@@ -48,8 +48,8 @@ export default function HomePage() {
               variants={fadeInUp}
               className="text-xl text-slate-600 dark:text-slate-400 max-w-3xl mx-auto mb-10"
             >
-              Experience the power of Agentic AI with 9 specialized agents working together 
-              to create your perfect budget-friendly travel itinerary.
+              Experience the power of Agentic AI with 6 intelligent agents collaborating in real time
+              to create your perfect personalized travel itinerary.
             </motion.p>
 
             <motion.div variants={fadeInUp} className="flex flex-col sm:flex-row gap-4 justify-center">
@@ -81,10 +81,10 @@ export default function HomePage() {
             className="grid grid-cols-2 md:grid-cols-4 gap-4"
           >
             {[
-              { icon: Brain, label: 'AI Agents', value: '9' },
-              { icon: Globe, label: 'Destinations', value: '15+' },
-              { icon: Users, label: 'Travel Types', value: '4' },
-              { icon: Shield, label: 'Smart Planning', value: '100%' },
+              { icon: Brain, label: 'Intelligent AI Agents', value: '6' },
+              { icon: Globe, label: 'Worldwide Destinations', value: '50+' },
+              { icon: Users, label: 'Travel Styles', value: '4' },
+              { icon: Shield, label: 'Real-Time Planning', value: '100%' },
             ].map((stat, i) => (
               <div key={i} className="glass rounded-2xl p-6 text-center hover-card">
                 <stat.icon className="w-8 h-8 text-indigo-600 dark:text-indigo-400 mx-auto mb-3" />
@@ -109,14 +109,14 @@ export default function HomePage() {
               How It Works
             </h2>
             <p className="text-lg text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
-              Nine specialized AI agents collaborate to create your perfect trip
+              Six intelligent AI agents collaborate to create your perfect trip
             </p>
           </motion.div>
 
           <div className="grid md:grid-cols-3 gap-8">
             {[
               { step: '01', title: 'Tell Us Your Preferences', desc: 'Share your budget, destination preferences, interests, and travel style with our AI system.' },
-              { step: '02', title: 'AI Agents Collaborate', desc: 'Nine specialized agents analyze budget, weather, transport, hotels, and attractions simultaneously.' },
+              { step: '02', title: 'AI Agents Collaborate', desc: 'Six specialized agents analyze budget, destination, weather, transport, hotels, and schedule simultaneously.' },
               { step: '03', title: 'Get Your Perfect Plan', desc: 'Receive a comprehensive itinerary with maps, expenses, packing lists, and smart recommendations.' },
             ].map((item, i) => (
               <motion.div

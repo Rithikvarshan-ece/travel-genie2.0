@@ -156,8 +156,7 @@ async def list_destinations(
     db: Session = Depends(get_db)
 ):
     """List available destinations with optional filtering."""
-from backend.database.models import Destination
-    
+    from backend.database.models import Destination
     query = db.query(Destination)
     
     if interest:

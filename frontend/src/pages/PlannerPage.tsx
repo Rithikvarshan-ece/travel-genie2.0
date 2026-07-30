@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import { useApp } from '@/context/AppContext';
 import { 
   Plane, Train, Bus, Car, Users, MapPin, 
-  Calendar, DollarSign, Sparkles, Loader2,
+  Calendar, IndianRupee, Sparkles, Loader2,
   Heart, TreePine, Utensils, ShoppingBag, 
   Landmark, Palmtree, Music, Building2,
   ChevronRight, AlertCircle
@@ -51,7 +51,7 @@ export default function PlannerPage() {
   const { isLoading, generatePlan, setError, error } = useApp();
   
   const [formData, setFormData] = useState<TravelFormData>({
-    budget: 1000,
+    budget: 50000,
     source_city: '',
     trip_days: 3,
     travel_type: 'solo',
@@ -106,12 +106,12 @@ export default function PlannerPage() {
           <div className="grid md:grid-cols-2 gap-6">
             <div className="space-y-2">
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
-                <DollarSign className="w-4 h-4 inline mr-1" />Total Budget (USD)
+                <IndianRupee className="w-4 h-4 inline mr-1" />Total Budget (INR)
               </label>
               <input type="number" value={formData.budget}
                 onChange={e => updateField('budget', Number(e.target.value))}
                 className="w-full px-4 py-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-                min={100} required />
+                min={1000} required />
             </div>
             <div className="space-y-2">
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -121,6 +121,15 @@ export default function PlannerPage() {
                 onChange={e => updateField('source_city', e.target.value)}
                 className="w-full px-4 py-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
                 placeholder="e.g., New York, London, Mumbai" required />
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                <MapPin className="w-4 h-4 inline mr-1" />Destination City <span className="text-slate-400 font-normal">(optional)</span>
+              </label>
+              <input type="text" value={formData.destination_city ?? ''}
+                onChange={e => updateField('destination_city', e.target.value || undefined)}
+                className="w-full px-4 py-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                placeholder="e.g., Paris, Bali, Mumbai" />
             </div>
             <div className="space-y-2">
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">

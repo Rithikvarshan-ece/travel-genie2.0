@@ -2,13 +2,13 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { Card, CardContent } from '@/components/ui/Card';
 import { 
-  Brain, Wallet, Globe, CloudSun, Route, 
-  Hotel, MapPin, Calendar, BarChart3, 
+  Brain, Wallet, Globe, Route, 
+  Calendar, BarChart3, 
   ArrowRight, CheckCircle2, Timer
 } from 'lucide-react';
 
 interface AgentPerformance {
-  [key: string]: number;
+  [key: string]: number | { duration_s?: number; confidence_pct?: number; apis_used?: string[] };
 }
 
 interface AgentPipelineProps {
@@ -17,14 +17,11 @@ interface AgentPipelineProps {
 }
 
 const pipelineSteps = [
-  { key: 'budget', name: 'Budget', icon: Wallet, color: 'text-emerald-500', bg: 'bg-emerald-50 dark:bg-emerald-900/20' },
+  { key: 'trip_feasibility', name: 'Feasibility', icon: Wallet, color: 'text-emerald-500', bg: 'bg-emerald-50 dark:bg-emerald-900/20' },
   { key: 'destination', name: 'Destination', icon: Globe, color: 'text-blue-500', bg: 'bg-blue-50 dark:bg-blue-900/20' },
-  { key: 'weather', name: 'Weather', icon: CloudSun, color: 'text-amber-500', bg: 'bg-amber-50 dark:bg-amber-900/20' },
-  { key: 'transport', name: 'Transport', icon: Route, color: 'text-cyan-500', bg: 'bg-cyan-50 dark:bg-cyan-900/20' },
-  { key: 'hotel', name: 'Hotel', icon: Hotel, color: 'text-purple-500', bg: 'bg-purple-50 dark:bg-purple-900/20' },
-  { key: 'attraction', name: 'Attractions', icon: MapPin, color: 'text-pink-500', bg: 'bg-pink-50 dark:bg-pink-900/20' },
-  { key: 'itinerary', name: 'Itinerary', icon: Calendar, color: 'text-orange-500', bg: 'bg-orange-50 dark:bg-orange-900/20' },
-  { key: 'expense', name: 'Expense', icon: BarChart3, color: 'text-red-500', bg: 'bg-red-50 dark:bg-red-900/20' },
+  { key: 'route_logistics', name: 'Route & Logistics', icon: Route, color: 'text-cyan-500', bg: 'bg-cyan-50 dark:bg-cyan-900/20' },
+  { key: 'schedule', name: 'Schedule', icon: Calendar, color: 'text-orange-500', bg: 'bg-orange-50 dark:bg-orange-900/20' },
+  { key: 'validation', name: 'Validation', icon: BarChart3, color: 'text-red-500', bg: 'bg-red-50 dark:bg-red-900/20' },
 ];
 
 export default function AgentPipeline({ agentPerformance, generationTime }: AgentPipelineProps) {
@@ -44,7 +41,8 @@ export default function AgentPipeline({ agentPerformance, generationTime }: Agen
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {pipelineSteps.map((step, i) => {
           const Icon = step.icon;
-          const time = agentPerformance?.[step.key];
+          const perf = agentPerformance?.[step.key];
+          const time = typeof perf === 'object' ? perf?.duration_s : perf;
           const isLast = i === pipelineSteps.length - 1;
 
           return (
@@ -82,7 +80,7 @@ export default function AgentPipeline({ agentPerformance, generationTime }: Agen
         <Brain className="w-6 h-6 text-white/80" />
         <div>
           <p className="text-sm font-semibold">Planner Agent</p>
-          <p className="text-xs text-indigo-100">Coordinates all 9 agents to generate your perfect travel plan</p>
+          <p className="text-xs text-indigo-100">Coordinates all 6 agents to generate your perfect travel plan</p>
         </div>
         <CheckCircle2 className="w-5 h-5 text-white/80 ml-auto" />
       </motion.div>

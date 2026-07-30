@@ -130,71 +130,104 @@ Your response must be valid JSON that matches this schema:
             raise AgentException(self.name, f"Failed to assess feasibility: {str(e)}", e)
 
     def _build_user_prompt(self, input_data: UserTravelInput) -> str:
-        """
-        Build the user prompt for LLM.
-        
-        Args:
-            input_data: User travel input
-            
-        Returns:
-            Formatted prompt for LLM
-        """
+        HOTEL_MIN_USD = {"hostel": 8.0, "budget": 25.0, "resort": 80.0, "luxury": 150.0}
+        pref = str(input_data.hotel_preference).split(".")[-1].lower()
+        min_hotel = HOTEL_MIN_USD.get(pref, 25.0)
+        hotel_budget_per_night = round(input_data.budget * 0.45 / max(input_data.trip_days, 1), 2)
+
         return f"""Please assess the feasibility of this trip:
 
-Budget: ${input_data.budget} USD
+Budget: ${input_data.budget} USD (INR {round(input_data.budget * 83):,})
 Trip Duration: {input_data.trip_days} days
 Travel Type: {input_data.travel_type}
 Source City: {input_data.source_city}
 Interests: {", ".join(input_data.interests)}
-Hotel Preference: {input_data.hotel_preference}
+Hotel Preference: {pref} (minimum cost: ${min_hotel:.0f}/night)
 Transportation Mode: {input_data.transportation}
 Travel Month: {input_data.travel_month}
 Special Requirements: {input_data.special_requirements or "None"}
 
-Based on typical travel costs, determine:
-1. Is this budget adequate for a {input_data.trip_days}-day trip for a {input_data.travel_type} traveler?
+Hotel budget available: ${hotel_budget_per_night:.2f}/night (45% of total / {input_data.trip_days} days)
+Minimum required for {pref}: ${min_hotel:.0f}/night
+
+CRITICAL: If hotel_budget_per_night < minimum required for the hotel preference,
+set is_feasible=false and explain the shortfall in warnings.
+
+Determine:
+1. Is this budget adequate for a {input_data.trip_days}-day {pref} trip?
 2. Calculate the daily budget
-3. How should the budget be allocated across accommodation, food, transport, and activities?
-4. What's the maximum distance (km) from {input_data.source_city} that could be affordably reached?
-5. What are the main budget constraints or concerns?
-6. How confident are you in this assessment (0.0-1.0)?"""
+3. Budget allocation: accommodation (45%), food (25%), transport (20%), activities (10%)
+4. Max affordable distance from {input_data.source_city}
+5. Main budget constraints
+6. Confidence score (0.0-1.0)"""
 
     async def fallback_response(self, user_prompt: str, system_prompt: str, output_model: type) -> TripFeasibilityOutput:
         """
         Generate a fallback trip feasibility response when the LLM is unavailable.
+        Hard-validates hotel style against budget before declaring feasibility.
         """
         input_data = getattr(self, 'last_input', None)
         if not isinstance(input_data, UserTravelInput):
             raise AgentException(self.name, "Fallback unavailable without valid input")
- 
-        daily_budget = round(input_data.budget / max(input_data.trip_days, 1), 2)
-        allocation = {
-            "accommodation": 45.0,
-            "food": 25.0,
-            "transport": 20.0,
-            "activities": 10.0,
+
+        budget_usd = input_data.budget
+        days = max(input_data.trip_days, 1)
+        daily_budget = round(budget_usd / days, 2)
+
+        # Minimum nightly hotel cost in USD per preference
+        HOTEL_MIN_USD = {
+            "hostel":  8.0,
+            "budget":  25.0,
+            "resort":  80.0,
+            "luxury":  150.0,
         }
-        total_distance = min(daily_budget * 50.0, 2500.0)
+        pref = str(input_data.hotel_preference).split(".")[-1].lower()
+        min_hotel_usd = HOTEL_MIN_USD.get(pref, 25.0)
+        # Hotel allocation is 45% of total budget
+        hotel_budget_usd = budget_usd * 0.45
+        hotel_budget_per_night = hotel_budget_usd / days
+
         warnings = []
-        if daily_budget < 50:
-            warnings.append("Budget is tight; expect modest accommodations and local experiences.")
-        if input_data.trip_days >= 14 and input_data.budget < 1000:
+        is_feasible = True
+
+        if hotel_budget_per_night < min_hotel_usd:
+            is_feasible = False
+            inr_budget = round(budget_usd * 83)
+            inr_min = round(min_hotel_usd * days / 0.45 * 83)
+            warnings.append(
+                f"{pref.title()} accommodation requires at least "
+                f"${min_hotel_usd:.0f}/night (INR {round(min_hotel_usd*83):,}). "
+                f"Your hotel budget is only ${hotel_budget_per_night:.0f}/night "
+                f"(INR {round(hotel_budget_per_night*83):,}). "
+                f"Minimum recommended budget: INR {inr_min:,}."
+            )
+
+        if daily_budget < 10:
+            is_feasible = False
+            warnings.append(f"Daily budget of ${daily_budget:.2f} is too low for any travel.")
+
+        if input_data.trip_days >= 14 and budget_usd < 500:
             warnings.append("Longer trips require more flexible planning and low-cost lodging.")
- 
-        output = TripFeasibilityOutput(
-            is_feasible=daily_budget >= 30,
+
+        allocation = {"accommodation": 45.0, "food": 25.0, "transport": 20.0, "activities": 10.0}
+        total_distance = min(daily_budget * 50.0, 2500.0)
+
+        reasoning = (
+            f"Budget ${budget_usd:.2f} USD over {days} days = ${daily_budget:.2f}/day. "
+            f"Hotel allocation (45%) = ${hotel_budget_per_night:.2f}/night. "
+            f"Minimum for {pref} = ${min_hotel_usd:.0f}/night. "
+            + ("FEASIBLE." if is_feasible else f"NOT FEASIBLE for {pref} preference.")
+        )
+
+        return TripFeasibilityOutput(
+            is_feasible=is_feasible,
             daily_budget=daily_budget,
             budget_allocation=allocation,
             max_affordable_distance=total_distance,
             warnings=warnings,
-            confidence_score=0.72,
-            reasoning=(
-                f"Based on a {input_data.trip_days}-day trip with a total budget of ${input_data.budget}, "
-                f"a sustainable daily budget of ${daily_budget:.2f} is estimated. "
-                "Budget allocation follows reasonable percentages for accommodation, food, transport, and activities."
-            ),
+            confidence_score=0.85,
+            reasoning=reasoning,
         )
-        return output
  
     def validate_output(self, output: TripFeasibilityOutput) -> bool:
         """

@@ -1,9 +1,12 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import { TravelFormData, TravelPlan } from '@/types/travel';
 
 interface AppState {
   isDarkMode: boolean;
   isLoading: boolean;
+  isStreaming: boolean;
+  isFollowingUp: boolean;
+  pendingRequest: TravelFormData | null;
   currentPlan: TravelPlan | null;
   error: string | null;
   tripHistory: TravelPlan[];
@@ -13,18 +16,40 @@ interface AppContextType extends AppState {
   toggleDarkMode: () => void;
   setLoading: (loading: boolean) => void;
   generatePlan: (data: TravelFormData) => Promise<void>;
+  followUp: (instruction: string) => Promise<void>;
   clearPlan: () => void;
   setError: (error: string | null) => void;
+  setPlan: (plan: TravelPlan) => void;
+  loadHistoryPlan: (plan: TravelPlan) => void;
+  deleteHistory: (planId: number) => void;
 }
 
-const API_BASE_URL = '/api';
+const HISTORY_KEY = 'travelgenie_history';
+
+function loadHistory(): TravelPlan[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(history: TravelPlan[]) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 10)));
+  } catch {}
+}
 
 const initialState: AppState = {
   isDarkMode: true,
   isLoading: false,
+  isStreaming: false,
+  isFollowingUp: false,
+  pendingRequest: null,
   currentPlan: null,
   error: null,
-  tripHistory: [],
+  tripHistory: loadHistory(),
 };
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -32,14 +57,15 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(initialState);
 
+  // Persist history whenever it changes
+  useEffect(() => {
+    saveHistory(state.tripHistory);
+  }, [state.tripHistory]);
+
   const toggleDarkMode = useCallback(() => {
     setState(prev => {
       const newMode = !prev.isDarkMode;
-      if (newMode) {
-        document.documentElement.classList.add('dark');
-      } else {
-        document.documentElement.classList.remove('dark');
-      }
+      document.documentElement.classList.toggle('dark', newMode);
       return { ...prev, isDarkMode: newMode };
     });
   }, []);
@@ -49,56 +75,87 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setError = useCallback((error: string | null) => {
-    setState(prev => ({ ...prev, error }));
+    setState(prev => ({ ...prev, error, isLoading: false, isStreaming: false, isFollowingUp: false, pendingRequest: null }));
   }, []);
 
   const clearPlan = useCallback(() => {
-    setState(prev => ({ ...prev, currentPlan: null, error: null }));
+    setState(prev => ({ ...prev, currentPlan: null, error: null, pendingRequest: null }));
   }, []);
 
-  const generatePlan = useCallback(async (data: TravelFormData) => {
-    setState(prev => ({ ...prev, isLoading: true, error: null }));
-    
-    try {
-      const response = await fetch(`${API_BASE_URL}/plan`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      });
-
-      const responseData = await response.json();
-      if (!response.ok) {
-        throw new Error(responseData.detail || responseData.error || 'Failed to generate travel plan');
-      }
-
-      const plan: TravelPlan = responseData.plan ?? responseData;
-      
-      setState(prev => ({
+  const setPlan = useCallback((plan: TravelPlan) => {
+    setState(prev => {
+      const history = [plan, ...prev.tripHistory.filter(p => p.plan_id !== plan.plan_id)].slice(0, 10);
+      return {
         ...prev,
         currentPlan: plan,
         isLoading: false,
-        tripHistory: [plan, ...prev.tripHistory].slice(0, 10),
-      }));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'An unexpected error occurred';
-      setState(prev => ({ ...prev, isLoading: false, error: message }));
-      throw err;
+        isStreaming: false,
+        isFollowingUp: false,
+        pendingRequest: null,
+        tripHistory: history,
+      };
+    });
+  }, []);
+
+  const loadHistoryPlan = useCallback((plan: TravelPlan) => {
+    setState(prev => ({ ...prev, currentPlan: plan, error: null }));
+  }, []);
+
+  const deleteHistory = useCallback((planId: number) => {
+    setState(prev => {
+      const history = prev.tripHistory.filter(p => p.plan_id !== planId);
+      saveHistory(history);
+      return { ...prev, tripHistory: history };
+    });
+  }, []);
+
+  const generatePlan = useCallback(async (data: TravelFormData) => {
+    setState(prev => ({
+      ...prev,
+      isLoading: false,
+      isStreaming: true,
+      pendingRequest: data,
+      error: null,
+      currentPlan: null,
+    }));
+  }, []);
+
+  const followUp = useCallback(async (instruction: string) => {
+    setState(prev => {
+      if (!prev.currentPlan) return { ...prev, error: 'No current plan to follow up on' };
+      return { ...prev, isFollowingUp: true, error: null };
+    });
+    // Read current plan from state snapshot via functional update
+    let planSnapshot: TravelPlan | null = null;
+    setState(prev => { planSnapshot = prev.currentPlan; return prev; });
+    try {
+      if (!planSnapshot) throw new Error('No current plan to follow up on');
+      const res = await fetch('/api/plan/followup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          original_request: (planSnapshot as TravelPlan).user_input,
+          instruction,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Follow-up failed');
+      const plan: TravelPlan = data.plan ?? data;
+      setState(prev => {
+        const history = [plan, ...prev.tripHistory.filter(p => p.plan_id !== plan.plan_id)].slice(0, 10);
+        return { ...prev, currentPlan: plan, isFollowingUp: false, tripHistory: history };
+      });
+    } catch (e: any) {
+      setState(prev => ({ ...prev, isFollowingUp: false, error: e.message }));
     }
   }, []);
 
   return (
-    <AppContext.Provider
-      value={{
-        ...state,
-        toggleDarkMode,
-        setLoading,
-        generatePlan,
-        clearPlan,
-        setError,
-      }}
-    >
+    <AppContext.Provider value={{
+      ...state,
+      toggleDarkMode, setLoading, generatePlan, followUp,
+      clearPlan, setError, setPlan, loadHistoryPlan, deleteHistory,
+    }}>
       {children}
     </AppContext.Provider>
   );
@@ -106,8 +163,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 export function useApp(): AppContextType {
   const context = useContext(AppContext);
-  if (!context) {
-    throw new Error('useApp must be used within an AppProvider');
-  }
+  if (!context) throw new Error('useApp must be used within an AppProvider');
   return context;
 }

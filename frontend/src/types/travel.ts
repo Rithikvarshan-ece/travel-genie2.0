@@ -3,6 +3,7 @@
 export interface TravelFormData {
   budget: number;
   source_city: string;
+  destination_city?: string;
   trip_days: number;
   travel_type: 'solo' | 'family' | 'couple' | 'friends';
   transportation: 'flight' | 'train' | 'bus' | 'car';
@@ -163,45 +164,65 @@ export interface BudgetStatus {
 export interface TravelPlan {
   plan_id: number;
   generation_time_seconds: number;
-  agent_performance?: Record<string, number>;
+  agent_performance?: Record<string, { duration_s: number; confidence_pct: number; apis_used: string[] }>;
+  why_reasons?: string[];
   user_input: TravelFormData;
   agents: {
     planner: any;
-    budget: {
+    trip_feasibility: {
+      is_feasible: boolean;
+      daily_budget: number;
+      budget_allocation: Record<string, number>;
+      budget_level: string;
       total_budget: number;
       breakdown: BudgetBreakdown;
-      daily_budget: any;
-      budget_level: string;
       optimization_tips: string[];
+      warnings: string[];
+      reasoning: string;
+      confidence_score: number;
     };
     destination: {
       suggestions: Destination[];
-    };
-    weather: {
-      forecast: WeatherForecast[];
-      warnings: string[];
-      activity_suggestions: { indoor: string[]; outdoor: string[]; note: string };
-      weather_summary: string;
-    };
-    transport: {
-      options: TransportOption[];
-      best_option: TransportOption;
-      comparison: any;
-    };
-    hotel: {
+      weather: {
+        forecast: WeatherForecast[];
+        warnings: string[];
+        activity_suggestions: { indoor: string[]; outdoor: string[]; note: string };
+        weather_summary: string;
+      };
       hotels: Hotel[];
       top_pick: Hotel;
-    };
-    attraction: {
       attractions: Attraction[];
       daily_breakdown: any[];
     };
-    itinerary: {
+    route_logistics: {
+      source: string;
+      destination: string;
+      travel_distance_km: number;
+      travel_time_hours: number;
+      transport_options: TransportOption[];
+      best_option: TransportOption;
+      recommended_mode: string;
+    };
+    schedule: {
       days: DayPlan[];
       summary: any;
       travel_tips: string[];
+      packing_recommendations: string[];
     };
-    expense: ExpenseData;
+    validation: {
+      is_valid: boolean;
+      budget_within_limit: boolean;
+      total_cost: number;
+      remaining_budget: number;
+      budget_utilization_percentage: number;
+      confidence_score: number;
+      issues: any[];
+      recommendations: string[];
+      expense_breakdown: Record<string, any>;
+      chart_data: ChartData;
+      budget_status: BudgetStatus;
+      saving_tips: string[];
+    };
   };
   status: string;
 }
